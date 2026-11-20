@@ -1,0 +1,57 @@
+import type {
+  ItemVenda,
+  StatusVenda,
+  Venda,
+} from '../../../../generated/prisma/client.js';
+
+export class ItemVendaDto {
+  /** @example 1 */
+  id: number;
+  /** @example 1 */
+  vendaId: number;
+  /** @example 1 */
+  receitaId: number;
+  /** @example 2 */
+  quantidade: number;
+  /** @example 12.5 */
+  precoUnitarioReal: number;
+  /** Custo unitário da receita na hora da venda. @example 7.3456 */
+  custoUnitario: number | null;
+  /** Fração com 4 casas; pode ser negativa. @example 0.4124 */
+  margemRealizada: number | null;
+}
+
+export class VendaDto {
+  /** @example 1 */
+  id: number;
+  /** @example 1 */
+  empresaId: number;
+  /** @example 25 */
+  total: number | null;
+  /** @example 'PENDENTE' */
+  status: StatusVenda;
+  /** @example '2026-11-19T12:00:00.000Z' */
+  dataVenda: Date;
+  itens: ItemVendaDto[];
+}
+
+export type VendaComItens = Venda & { itens: ItemVenda[] };
+
+export function toVendaDto(row: VendaComItens): VendaDto {
+  return {
+    id: row.id,
+    empresaId: row.empresaId,
+    total: row.total,
+    status: row.status,
+    dataVenda: row.dataVenda,
+    itens: row.itens.map((item) => ({
+      id: item.id,
+      vendaId: item.vendaId,
+      receitaId: item.receitaId,
+      quantidade: item.quantidade,
+      precoUnitarioReal: item.precoUnitarioReal,
+      custoUnitario: item.custoUnitario,
+      margemRealizada: item.margemRealizada,
+    })),
+  };
+}

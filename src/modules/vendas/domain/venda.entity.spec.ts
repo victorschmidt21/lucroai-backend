@@ -84,14 +84,11 @@ describe('Venda.alterarStatus', () => {
   const venda = (status: StatusVenda) =>
     Venda.restaurar({ id: 1, empresaId: 7, status });
 
-  it.each<StatusVenda>(['CONCLUIDA', 'CANCELADA'])(
-    'PENDENTE → %s',
-    (novo) => {
-      const v = venda('PENDENTE');
-      v.alterarStatus(novo);
-      expect(v.status).toBe(novo);
-    },
-  );
+  it.each<StatusVenda>(['CONCLUIDA', 'CANCELADA'])('PENDENTE → %s', (novo) => {
+    const v = venda('PENDENTE');
+    v.alterarStatus(novo);
+    expect(v.status).toBe(novo);
+  });
 
   it.each<[StatusVenda, StatusVenda]>([
     ['CONCLUIDA', 'CANCELADA'],
