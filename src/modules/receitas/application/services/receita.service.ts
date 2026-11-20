@@ -5,17 +5,32 @@ import { GastoIndiretoService } from '../../../gastos-indiretos/application/serv
 import { InsumoService } from '../../../insumos/application/services/insumo.service.js';
 import {
   calcularCustoReceita,
+  calcularPrecoVenda,
   type CustoReceita,
   precisaRecalcular,
   resolverMargem,
+  simularCenario,
 } from '../../domain/receitas.calculos.js';
 import { ReceitaRepository } from '../../infra/repositories/receita.repository.js';
 import type { CreateReceitaDto } from '../dto/create-receita.dto.js';
+import {
+  type PrecoVendaBodyDto,
+  type PrecoVendaDto,
+  toPrecoVendaDto,
+} from '../dto/preco-venda.dto.js';
+import {
+  type ReceitaCustoDto,
+  toReceitaCustoDto,
+} from '../dto/receita-custo.dto.js';
 import {
   type ReceitaComItens,
   type ReceitaDto,
   toReceitaDto,
 } from '../dto/receita.dto.js';
+import type {
+  SimulacaoCenarioDto,
+  SimularCenarioDto,
+} from '../dto/simular-cenario.dto.js';
 import type { UpdateReceitaDto } from '../dto/update-receita.dto.js';
 
 interface ItemEntrada {
@@ -118,6 +133,51 @@ export class ReceitaService {
     await this.repository.delete(id);
   }
 
+  /**
+   * Custo de `lotes` lotes, recalculado com os custos atuais dos insumos e
+   * os gastos atuais da empresa (não usa os valores salvos). Não grava nada.
+   */
+  async calcularCusto(
+    id: number,
+    lotes: number,
+    empresaId: number,
+  ): Promise<ReceitaCustoDto> {
+    const receita = await this.getOrFail(id, empresaId);
+    const custo = await this.calcular(
+      receita.itens.map((item) => ({
+        insumo_id: item.insumoId,
+        quantidade: item.quantidade,
+      })),
+      receita.rendimento,
+      receita.margemLucro,
+      empresaId,
+      lotes,
+    );
+    return toReceitaCustoDto(custo);
+  }
+
+  /** Simulação de cenário com os valores salvos como padrão. Não grava nada. */
+  async simular(
+    id: number,
+    dto: SimularCenarioDto,
+    empresaId: number,
+  ): Promise<SimulacaoCenarioDto> {
+    const receita = await this.getOrFail(id, empresaId);
+    return simularCenario(dto, receita);
+  }
+
+  /** Preço de venda para a margem informada, com o custo salvo. Não grava nada. */
+  async calcularPrecoVenda(
+    id: number,
+    dto: PrecoVendaBodyDto,
+    empresaId: number,
+  ): Promise<PrecoVendaDto> {
+    const receita = await this.getOrFail(id, empresaId);
+    return toPrecoVendaDto(
+      calcularPrecoVenda(receita.custoUnitario, dto.margem_lucro),
+    );
+  }
+
   /** Para outros módulos (produções, vendas): a receita com os itens; 404 se não for da empresa. */
   async buscarDaEmpresa(
     id: number,
@@ -133,6 +193,7 @@ export class ReceitaService {
     rendimento: number,
     margemLucro: number | null,
     empresaId: number,
+    lotes = 1,
   ): Promise<CustoReceita> {
     const [encontrados, gastos] = await Promise.all([
       this.insumoService.buscarVariosDaEmpresa(
@@ -151,6 +212,7 @@ export class ReceitaService {
       rendimento,
       margemLucro,
       gastos,
+      lotes,
     });
   }
 

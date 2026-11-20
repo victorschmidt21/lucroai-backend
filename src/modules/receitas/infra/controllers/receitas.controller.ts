@@ -14,7 +14,17 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../../../shared/infra/auth/current-user.decorator.js';
 import type { UsuarioAutenticado } from '../../../../shared/infra/auth/usuario-autenticado.js';
 import { CreateReceitaDto } from '../../application/dto/create-receita.dto.js';
+import {
+  PrecoVendaBodyDto,
+  type PrecoVendaDto,
+} from '../../application/dto/preco-venda.dto.js';
+import type { ReceitaCustoDto } from '../../application/dto/receita-custo.dto.js';
 import type { ReceitaDto } from '../../application/dto/receita.dto.js';
+import {
+  type SimulacaoCenarioDto,
+  SimularCenarioDto,
+} from '../../application/dto/simular-cenario.dto.js';
+import { SimularCustoDto } from '../../application/dto/simular-custo.dto.js';
 import { UpdateReceitaDto } from '../../application/dto/update-receita.dto.js';
 import { ReceitaService } from '../../application/services/receita.service.js';
 
@@ -28,6 +38,49 @@ export class ReceitasController {
   @Get()
   list(@CurrentUser() usuario: UsuarioAutenticado): Promise<ReceitaDto[]> {
     return this.service.list(usuario.empresa.id);
+  }
+
+  /** Custo de 1 lote, recalculado com os custos e gastos atuais */
+  @Get(':id/custo')
+  calcularCusto(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() usuario: UsuarioAutenticado,
+  ): Promise<ReceitaCustoDto> {
+    return this.service.calcularCusto(id, 1, usuario.empresa.id);
+  }
+
+  /** Custo de N lotes, recalculado com os custos e gastos atuais */
+  @Post(':id/custo/simular')
+  simularCusto(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SimularCustoDto,
+    @CurrentUser() usuario: UsuarioAutenticado,
+  ): Promise<ReceitaCustoDto> {
+    return this.service.calcularCusto(
+      id,
+      dto.quantidadeLotes,
+      usuario.empresa.id,
+    );
+  }
+
+  /** Simula lucro, margem e break-even (400 sem custo, sem preço ou com preço 0) */
+  @Post(':id/simular')
+  simular(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SimularCenarioDto,
+    @CurrentUser() usuario: UsuarioAutenticado,
+  ): Promise<SimulacaoCenarioDto> {
+    return this.service.simular(id, dto, usuario.empresa.id);
+  }
+
+  /** Calcula o preço de venda para uma margem, sem gravar */
+  @Post(':id/preco-venda')
+  calcularPrecoVenda(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: PrecoVendaBodyDto,
+    @CurrentUser() usuario: UsuarioAutenticado,
+  ): Promise<PrecoVendaDto> {
+    return this.service.calcularPrecoVenda(id, dto, usuario.empresa.id);
   }
 
   /** Detalha uma receita com os itens */
