@@ -101,12 +101,7 @@ Antes de dizer que terminou: `npm run lint && npm run format:check && npm run bu
 | `infra/http/` | `AllExceptionsFilter` (formato único de erro), `ErrorResponseDto` e `validationExceptionFactory` (400 `DADOS_INVALIDOS` com `details` por campo), registrados em `app.setup.ts` |
 | `infra/auth/` | `JwtAuthModule` (global: `JwtService` HS256 com 4 h e `JwtAuthGuard` como guard global), `@Public()`, `@CurrentUser()` e o tipo `UsuarioAutenticado` (`{ sub, email, nome, empresa: { id, nome, cnpj, segmento } }`) |
 | `infra/health/` | `GET /health` (pública), com `SELECT 1` no banco |
-
-Previsto em issues futuras (não use antes de existir):
-
-| Caminho | O que é | Issue |
-| --- | --- | --- |
-| `domain/arredondamento.ts` | `round2`, `round4` e `round6` ([business-rules.md](docs/business-rules.md#arredondamento)) | primeira issue que precisar (BE-07 ou BE-08) |
+| `domain/arredondamento.ts` | `round2`, `round4` e `round6` (`Number(v.toFixed(n))`, [business-rules.md](docs/business-rules.md#arredondamento)) |
 
 ## Convenções
 

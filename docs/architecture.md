@@ -39,9 +39,9 @@ Cada tabela pertence a **um** módulo, e só ele lê e escreve nela pelo Prisma.
 | Módulo | Tabelas (models) | Responsabilidade | Depende de | Issues |
 | --- | --- | --- | --- | --- |
 | `auth` | `Empresa`, `Usuario` | cadastro de empresa, login e JWT (assinado com o `JwtService` do `JwtAuthModule`); não exporta service | — | BE-06 |
-| `estoque` | `Estoque`, `MovimentacaoEstoque`, `EstoqueProdutoAcabado`, `MovimentacaoProdutoAcabado` | saldo e histórico de insumos e de produto acabado | — | BE-07, BE-11, BE-12 |
-| `insumos` | `Insumo` | cadastro de insumos e custo unitário | `estoque` | BE-07 |
-| `gastos-indiretos` | `GastoIndireto` | cadastro de gastos e cálculo do rateio | — | BE-08 |
+| `estoque` | `Estoque`, `MovimentacaoEstoque`, `EstoqueProdutoAcabado`, `MovimentacaoProdutoAcabado` | saldo e histórico de insumos e de produto acabado; exporta `EstoqueService` (`criarRegistroInicial` e `saldosPorInsumo` desde a BE-07) | — | BE-07, BE-11, BE-12 |
+| `insumos` | `Insumo` | cadastro de insumos e custo unitário; cria o estoque inicial na mesma transação; exporta `InsumoService` | `estoque` | BE-07 |
+| `gastos-indiretos` | `GastoIndireto` | cadastro de gastos e cálculo do rateio (`calcularValorRateado`); exporta `GastoIndiretoService` (`listarPorEmpresa` e `buscarVariosDaEmpresa`) | — | BE-08 |
 | `receitas` | `Receita`, `ItemReceita` | receitas, custo, custo para N lotes, simulação e preço de venda | `insumos`, `gastos-indiretos` | BE-09, BE-10 |
 | `producoes` | `Producao`, `RateioProducao` | produção com rateio, baixa de insumos e entrada de produto acabado | `receitas`, `gastos-indiretos`, `estoque` | BE-12 |
 | `vendas` | `Venda`, `ItemVenda` | vendas e conclusão com baixa de produto acabado | `receitas`, `estoque` | BE-13 |
@@ -411,6 +411,7 @@ export class GastoIndiretoService {
     tx?: PrismaTransaction,
   ): Promise<GastoIndiretoDto[]> {
     const unicos = [...new Set(ids)];
+    if (unicos.length === 0) return [];
     const rows = await this.repository.listByIdsAndEmpresa(unicos, empresaId, tx);
     if (rows.length !== unicos.length) {
       throw new NotFoundError('GASTO_INDIRETO_NAO_ENCONTRADO', 'Gasto indireto não encontrado');
