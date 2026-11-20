@@ -249,12 +249,14 @@ status inicial   = PENDENTE
 ```
 
 - Item: `receita_id` inteiro > 0, `quantidade` inteiro > 0, `preco_unitario_real` > 0 com até 2 casas.
-- Transições: só `PENDENTE` muda, para `CONCLUIDA` ou `CANCELADA`. Qualquer outro caso → "Venda já finalizada não pode ser alterada". **Muda (BE-13):** o status passa de 400 para 422.
+- Receita sem `custoUnitario` salvo → `custoUnitario` e `margemRealizada` do item ficam `null` (a venda é registrada mesmo assim). A margem pode ser negativa (preço abaixo do custo).
+- Transições: só `PENDENTE` muda, para `CONCLUIDA` ou `CANCELADA`. Venda `CONCLUIDA` ou `CANCELADA` → 422 `VENDA_FINALIZADA` "Venda já finalizada não pode ser alterada". **Muda (BE-13):** o status passa de 400 para 422, e `PENDENTE` → `PENDENTE` (hoje aceito sem efeito) dá 422 `TRANSICAO_INVALIDA` "Venda pendente só pode ser concluída ou cancelada".
 - O registro não confere o estoque (lacuna 24, mantida): a barreira é a conclusão.
 - **Muda (BE-13):** concluir dá baixa de cada item no produto acabado **na mesma transação** da mudança de status. Sem saldo → 422 "Estoque insuficiente..." e a venda continua `PENDENTE` (lacuna 9). Hoje a baixa é assíncrona e a venda fica `CONCLUIDA` mesmo sem saldo.
 - **Muda (BE-13):** `itens` não pode ser vazio (lacuna 25); a receita precisa ser da empresa (lacuna 26); filtros inválidos dão 400 (lacuna 8).
-- Listagem: filtros `status`, `dataInicio` (`dataVenda ≥`) e `dataFim` (`dataVenda ≤`), da mais recente para a mais antiga (`prisma-venda.repository.ts`, `findAll`).
-- `Venda` é a única entidade de classe do projeto (BE-13): total, margem e transições de status ficam nela.
+- A conclusão percorre os itens na ordem em que foram gravados, chamando `EstoqueProdutoAcabadoService.saidaPorVenda` (trava a linha do saldo; `SAIDA/VENDA`, `referenciaId` = id da venda, uma movimentação por item). Vários itens da mesma receita somam: o segundo já vê o saldo descontado do primeiro. A mudança de status usa `UPDATE ... WHERE status = 'PENDENTE'`: duas conclusões simultâneas da mesma venda não dão baixa duas vezes (a segunda recebe `VENDA_FINALIZADA`). Cancelar não mexe no estoque.
+- Listagem: filtros `status`, `dataInicio` (`dataVenda ≥`) e `dataFim` (`dataVenda ≤`), da mais recente para a mais antiga (`prisma-venda.repository.ts`, `findAll`); o `id` desempata. **Muda (BE-13, lacuna 7):** as datas precisam ter data, hora e fuso (`Z` ou `±hh:mm`), como a web envia (`toISOString()`); só a data → 400.
+- `Venda` é a única entidade de classe do projeto (BE-13, `vendas/domain/venda.entity.ts`): `Venda.nova` (margem, total e status inicial), `calcularMargemRealizada`, `calcularTotal` e `alterarStatus` (transições) ficam nela.
 
 ## Lacunas do backend atual
 
