@@ -17,14 +17,14 @@ O padrão vem da Urbizzi, **simplificado** porque o LucroAI é quase todo CRUD c
 ```
 src/
 ├── main.ts                  # bootstrap (lê PORT e chama setupApp)
-├── app.module.ts            # ConfigModule, PrismaModule, HealthModule e os módulos de domínio
-├── app.setup.ts             # ValidationPipe, filtro de erros e Swagger (sem CORS, sem versão)
+├── app.module.ts            # ConfigModule, PrismaModule, JwtAuthModule, HealthModule e os módulos de domínio
+├── app.setup.ts             # ValidationPipe, AllExceptionsFilter e Swagger (sem CORS, sem versão, sem envelope)
 ├── config/env.validation.ts # schema Zod das variáveis de ambiente
 ├── generated/prisma/        # Prisma Client gerado (não editar, não versionado)
 ├── modules/<modulo>/        # módulos de domínio (ver mapa abaixo)
 └── shared/                  # código transversal, sem regra de nenhum módulo
     ├── domain/              # erros de domínio, arredondamento
-    └── infra/               # database, health, http (filtro e validação), auth (guard e decorators)
+    └── infra/               # database (Prisma, TransactionManager), health, http (filtro e validação), auth (JwtAuthModule, guard e decorators)
 test/                        # e2e: fumaça (health) e contrato com o frontend
 prisma/                      # schema.prisma, migrations e seed
 docs/                        # esta documentação
@@ -131,7 +131,7 @@ Proibido: importar `application/` ou `infra/` de outro módulo, injetar o reposi
 ## Fluxo de uma requisição
 
 ```
-HTTP → JwtAuthGuard global (401; @Public() dispensa)
+HTTP → JwtAuthGuard global (401 NAO_AUTENTICADO ou TOKEN_INVALIDO; @Public() dispensa)
      → ValidationPipe global (400 DADOS_INVALIDOS; whitelist, forbidNonWhitelisted, transform)
      → Controller (infra): extrai params, corpo e @CurrentUser() e chama o service
      → Service (application): confere empresa e existência, chama domain/ e outros módulos, abre transação
@@ -141,13 +141,17 @@ HTTP → JwtAuthGuard global (401; @Public() dispensa)
 Qualquer exceção → AllExceptionsFilter → { statusCode, code, message, details?, path, timestamp }
 ```
 
+- O `JwtAuthModule` (`src/shared/infra/auth/jwt-auth.module.ts`) é global: registra o `JwtService` (HS256, `expiresIn: '4h'`, segredo `JWT_SECRET`) e o `JwtAuthGuard` como `APP_GUARD`. O módulo `auth` só injeta o `JwtService` para assinar o token; não registre o `JwtModule` de novo.
+- O guard confere o token e o formato mínimo do payload (`sub`, `email`, `empresa.id`) e põe o `UsuarioAutenticado` em `request.user`, lido por `@CurrentUser()`.
+- O `AllExceptionsFilter` traduz os erros de domínio pelo status da classe, os de validação para `DADOS_INVALIDOS` com `details`, as exceções que o próprio Nest lança em inglês (rota inexistente, `ParseIntPipe`, JSON malformado, throttler) para um `code` e uma mensagem padrão em português, e qualquer outro erro para 500 `ERRO_INTERNO`, registrando a stack só no log.
+
 ## Banco
 
 - Um schema só, `prisma/schema.prisma` (BE-05), com chaves estrangeiras reais entre as tabelas. Nomes de tabela e coluna em `snake_case` com `@@map`/`@map`, iguais aos dos microsserviços; models em `PascalCase` singular e campos em `camelCase`.
 - Ids `Int @default(autoincrement())`; valores e quantidades `Float`, arredondados antes de gravar ([business-rules.md](business-rules.md#arredondamento)).
 - `empresa_id` em toda tabela de negócio, com índice.
 - Migration nova: `npm run db:migrate -- --name <verbo>_<descricao>`. Nunca edite uma migration já mergeada nem `src/generated/`.
-- Transações: `TransactionManager.run(async (tx) => ...)` em `src/shared/infra/database/` (BE-04). O tipo do `tx` é `PrismaTransaction`.
+- Transações: `TransactionManager.run(async (tx) => ...)` em `src/shared/infra/database/transaction.manager.ts`, injetável em qualquer service (o `PrismaModule` é global e o exporta). O tipo do `tx` é `PrismaTransaction` (`prisma.transaction.ts`).
 
 ## Exemplo completo: módulo `gastos-indiretos`
 

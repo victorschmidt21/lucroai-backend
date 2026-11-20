@@ -97,7 +97,7 @@ Payload do JWT (HS256, 4 h): `{ sub, email, nome, empresa: { id, nome, cnpj, seg
 
 ## Erros
 
-Formato único, gerado pelo `AllExceptionsFilter` (BE-04), o mesmo da Urbizzi:
+Formato único, gerado pelo `AllExceptionsFilter` (`src/shared/infra/http/`), o mesmo da Urbizzi:
 
 ```json
 {
@@ -109,7 +109,7 @@ Formato único, gerado pelo `AllExceptionsFilter` (BE-04), o mesmo da Urbizzi:
 }
 ```
 
-- `details` aparece só na validação: `[{ "field": "itens.0.quantidade", "messages": ["..."] }]`.
+- `details` aparece só na validação (e num `InvalidInputError` que o receba): `[{ "field": "itens.0.quantidade", "messages": ["..."] }]`. O `message` é sempre "Os dados enviados são inválidos"; as `messages` de cada campo são as do `class-validator` (em inglês, a menos que o DTO defina `message` no decorator).
 - O frontend lê `statusCode` e `message` (string ou lista); `error` é opcional para ele e não é enviado. `code` é novo e estável, para quem quiser tratar.
 - Mensagens em português. Erro inesperado → 500 com mensagem genérica, sem stack nem texto interno.
 
@@ -117,10 +117,17 @@ Formato único, gerado pelo `AllExceptionsFilter` (BE-04), o mesmo da Urbizzi:
 | --- | --- | --- | --- |
 | 400 | `ValidationPipe` | corpo, query ou parâmetro inválido | `DADOS_INVALIDOS` |
 | 400 | `InvalidInputError` | entrada que só o service confere | `PRECO_INVALIDO`, `RECEITA_SEM_CUSTO` |
-| 401 | `UnauthorizedError` / guard | sem token, token inválido ou expirado, credenciais inválidas | `CREDENCIAIS_INVALIDAS` |
+| 400 | exceção do Nest | `ParseIntPipe`, JSON malformado | `DADOS_INVALIDOS` |
+| 401 | `UnauthorizedError` / `JwtAuthGuard` | sem token (`NAO_AUTENTICADO`, "Autenticação necessária"), token inválido ou expirado (`TOKEN_INVALIDO`, "Token inválido ou expirado"), credenciais inválidas | `NAO_AUTENTICADO`, `TOKEN_INVALIDO`, `CREDENCIAIS_INVALIDAS` |
+| 403 | `ForbiddenError` | reservado; outra empresa responde 404 | — |
 | 404 | `NotFoundError` | inexistente **ou de outra empresa** | `<ENTIDADE>_NAO_ENCONTRADO` |
+| 404 | exceção do Nest | rota inexistente | `RECURSO_NAO_ENCONTRADO` |
 | 409 | `ConflictError` | duplicidade ou registro em uso | `CNPJ_JA_CADASTRADO`, `EMAIL_JA_CADASTRADO`, `INSUMO_EM_USO`, `RECEITA_EM_USO` |
 | 422 | `BusinessRuleError` | entrada válida que viola uma regra | `ESTOQUE_INSUFICIENTE`, `VENDA_FINALIZADA` |
+| 429 | `@nestjs/throttler` | limite de tentativas do login | `MUITAS_REQUISICOES` |
+| 503 | `GET /health` | banco fora do ar | `SERVICO_INDISPONIVEL` |
 | 500 | qualquer outro erro | falha inesperada | `ERRO_INTERNO` |
+
+As exceções que o próprio Nest lança em inglês nunca repassam o texto original: viram o `code` e a mensagem padrão do status, em português. Um `P2002`/`P2025` do Prisma que escape do repositório vira 409 `REGISTRO_DUPLICADO`/404 `RECURSO_NAO_ENCONTRADO`, mas o repositório deve traduzi-los antes num erro com `code` próprio.
 
 Mensagens que o frontend reconhece pelo texto e que **não podem mudar**: as de estoque insuficiente começam com "Estoque insuficiente" (`isEstoqueInsuficiente`). As mensagens de negócio de hoje ("Insumo não encontrado", "Venda já finalizada não pode ser alterada", "CNPJ já cadastrado"...) são mantidas.

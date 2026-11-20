@@ -95,17 +95,17 @@ Antes de dizer que terminou: `npm run lint && npm run format:check && npm run bu
 
 | Caminho | O que é |
 | --- | --- |
+| `domain/errors/domain.error.ts` | `DomainError` e subclasses: `InvalidInputError` (400, aceita `details`), `UnauthorizedError` (401), `ForbiddenError` (403), `NotFoundError` (404), `ConflictError` (409), `BusinessRuleError` (422) |
 | `infra/database/prisma.module.ts`, `prisma.service.ts` | `PrismaModule` (global) e `PrismaService` (Prisma 7 com `@prisma/adapter-pg`) |
-| `infra/health/` | `GET /health`, com `SELECT 1` no banco |
+| `infra/database/transaction.manager.ts`, `prisma.transaction.ts` | `TransactionManager` (`run(async (tx) => ...)`, exportado pelo `PrismaModule`) e o tipo `PrismaTransaction` |
+| `infra/http/` | `AllExceptionsFilter` (formato único de erro), `ErrorResponseDto` e `validationExceptionFactory` (400 `DADOS_INVALIDOS` com `details` por campo), registrados em `app.setup.ts` |
+| `infra/auth/` | `JwtAuthModule` (global: `JwtService` HS256 com 4 h e `JwtAuthGuard` como guard global), `@Public()`, `@CurrentUser()` e o tipo `UsuarioAutenticado` (`{ sub, email, nome, empresa: { id, nome, cnpj, segmento } }`) |
+| `infra/health/` | `GET /health` (pública), com `SELECT 1` no banco |
 
 Previsto em issues futuras (não use antes de existir):
 
 | Caminho | O que é | Issue |
 | --- | --- | --- |
-| `domain/errors/domain.error.ts` | `DomainError` e subclasses (400, 401, 403, 404, 409, 422) | BE-04 |
-| `infra/http/` | `AllExceptionsFilter`, `ErrorResponseDto` e `validationExceptionFactory` | BE-04 |
-| `infra/auth/` | guard JWT global, `@Public()`, `@CurrentUser()` e o tipo `UsuarioAutenticado` (`{ sub, email, nome, empresa: { id, nome, cnpj, segmento } }`) | BE-04 |
-| `infra/database/transaction.manager.ts`, `prisma.transaction.ts` | `TransactionManager` e o tipo `PrismaTransaction` | BE-04 |
 | `domain/arredondamento.ts` | `round2`, `round4` e `round6` ([business-rules.md](docs/business-rules.md#arredondamento)) | primeira issue que precisar (BE-07 ou BE-08) |
 
 ## Convenções
