@@ -17,7 +17,7 @@ O produto é inicial: entregue rápido e simples. O padrão de módulo é **mais
 | Runtime | Node.js 24, ESM (`"type": "module"`) |
 | Framework | NestJS 12, TypeScript `strict` |
 | Banco | PostgreSQL 17 + Prisma ORM 7 (`@prisma/adapter-pg`) |
-| Validação | `class-validator` / `class-transformer` (DTOs), Zod (só variáveis de ambiente) |
+| Validação | `class-validator` / `class-transformer` (DTOs), Zod (variáveis de ambiente e a cópia dos contratos do frontend no teste de contrato) |
 | Autenticação | JWT HS256 (`@nestjs/jwt`), senha com `argon2`, limite de tentativas com `@nestjs/throttler` no `AuthController` |
 | Documentação da API | `@nestjs/swagger` com CLI plugin, em `/docs` |
 | Testes | Vitest + Supertest |
@@ -35,7 +35,7 @@ npm run format                          # Prettier (escreve)
 npm run format:check                    # Prettier (só verifica)
 npm run build                           # compila para dist/
 npm test                                # testes unitários (src/**/*.spec.ts)
-npm run test:e2e                        # e2e no banco lucroai_test (precisa do Postgres no ar)
+npm run test:e2e                        # e2e no banco lucroai_test, inclusive o de contrato (precisa do Postgres no ar)
 npx vitest run caminho/arquivo.spec.ts  # um arquivo só
 npm run db:migrate -- --name <nome>     # cria e aplica migration
 npm run db:deploy                       # aplica as migrations existentes
@@ -145,7 +145,7 @@ Antes de dizer que terminou: `npm run lint && npm run format:check && npm run bu
 Política do produto inicial:
 
 - **Unitário** só das funções de `domain/` (fórmulas e regras) e da entidade `Venda`. Cada ramo de uma fórmula tem um caso, com os números conferidos nos microsserviços.
-- **E2E** só no teste de fumaça (`test/health.e2e-spec.ts`, BE-01) e no teste de contrato com o frontend (`test/contrato.e2e-spec.ts`, BE-15).
+- **E2E** só no teste de fumaça (`test/health.e2e-spec.ts`, BE-01) e no teste de contrato com o frontend (`test/contrato.e2e-spec.ts`, BE-15). O de contrato valida as respostas com a cópia dos schemas Zod do frontend em `test/contrato/`; rota nova ou mudança de resposta entra nele, e a cópia se atualiza como em [docs/api.md](docs/api.md#teste-de-contrato).
 - **Não escreva** testes de controller, de repositório ou de service com mocks.
 - Sem meta de cobertura.
 - Teste extra só quando a issue pedir na seção "Testes".

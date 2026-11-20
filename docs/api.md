@@ -81,6 +81,25 @@ Observações:
 - `POST /vendas`: `itens` não vazio; `receita_id` e `quantidade` inteiros > 0; `preco_unitario_real` > 0 com até 2 casas. Receita de outra empresa → 404 `RECEITA_NAO_ENCONTRADA`. Não confere o estoque.
 - `PATCH /vendas/:id/status`: `status` do enum `StatusVenda`. Venda já `CONCLUIDA` ou `CANCELADA` → 422 `VENDA_FINALIZADA`; `PENDENTE` → `PENDENTE` → 422 `TRANSICAO_INVALIDA`; concluir sem saldo de produto acabado → 422 `ESTOQUE_INSUFICIENTE` e nada é gravado (a venda continua `PENDENTE`).
 
+## Teste de contrato
+
+`test/contrato.e2e-spec.ts` (BE-15) é a barreira contra quebra do contrato. Ele roda com `npm run test:e2e` (local no `lucroai_test`; no CI, no Postgres de serviço) e cria os próprios dados com e-mails únicos, então não depende do seed nem de banco limpo. Percorre o fluxo principal (cadastro e login; insumo, gasto e receita; custo, simulação e preço; entrada de estoque e produção; venda, conclusão e conclusão recusada sem saldo), chama todas as rotas da tabela acima, confere o isolamento entre duas empresas (404) e o 401 sem token, e valida cada resposta com os schemas Zod do frontend. Erros são validados contra o [formato padrão](#erros); as rotas novas (`/estoque/produtos`, cadastro de empresa) contra schemas locais no próprio teste.
+
+Os schemas ficam em `test/contrato/`, copiados de `lucroai-frontend/src/shared/api/contracts/` (sem os `*.test.ts`). Cada arquivo diz o commit de origem e a data da cópia, e a única mudança é o `.js` nos imports relativos. Para atualizar, com o frontend clonado ao lado:
+
+```bash
+FE=../lucroai-frontend; COMMIT=$(git -C $FE log -1 --format=%h -- src/shared/api/contracts/); HOJE=$(date +%F)
+for f in auth catalog enums operations recipe sales; do
+  { echo "// Cópia de lucroai-frontend/src/shared/api/contracts/$f.ts (commit $COMMIT),"
+    echo "// copiada em $HOJE. Não edite: atualize pelo procedimento de docs/api.md."
+    echo '// Única mudança: imports relativos com `.js` (ESM nodenext).'; echo
+    sed "s#from './enums'#from './enums.js'#" $FE/src/shared/api/contracts/$f.ts; } > test/contrato/$f.ts
+done
+npm run format && npm run test:e2e
+```
+
+Arquivo novo em `contracts/` entra na lista do `for`. Se o teste falhar depois da cópia, corrija a API, não a cópia.
+
 ## Respostas
 
 "omitido" = sem valor, o campo não vem no JSON; "`null`" = vem como `null`. Campos marcados **novo** são aditivos.
