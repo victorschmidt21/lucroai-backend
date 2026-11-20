@@ -25,12 +25,19 @@ COPY . .
 RUN npx prisma generate && npm run build
 
 # ---------- production: apenas runtime ----------
-# --omit=optional remove o Prisma CLI/Studio, peers opcionais do @prisma/client.
+# Reaproveita o node_modules do build e remove as devDependencies. O Prisma CLI
+# fica (é "devOptional": peer opcional do @prisma/client), com o schema engine
+# já baixado para Alpine, porque o contêiner aplica as migrations ao subir.
 FROM base AS production
 ENV NODE_ENV=production
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --omit=optional --ignore-scripts && npm cache clean --force
+COPY --from=build /usr/src/app/package.json /usr/src/app/package-lock.json /usr/src/app/prisma7.config.ts ./
+COPY --from=build /usr/src/app/prisma ./prisma
+COPY --from=build /usr/src/app/node_modules ./node_modules
+RUN npm prune --omit=dev && npm cache clean --force
 COPY --from=build /usr/src/app/dist ./dist
 USER node
 EXPOSE 3100
-CMD ["node", "dist/main.js"]
+# GET /health faz SELECT 1 no banco. wget vem no BusyBox do Alpine.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3   CMD wget -q -O /dev/null "http://127.0.0.1:${PORT:-3100}/health" || exit 1
+# Aplica as migrations pendentes antes de iniciar; se falhar, o contêiner não sobe.
+CMD ["sh", "-c", "npx prisma migrate deploy && exec node dist/main.js"]
