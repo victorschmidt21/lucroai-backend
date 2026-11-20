@@ -25,8 +25,15 @@ cp .env.example .env
 docker compose up -d postgres   # ou um Postgres próprio, ajustando DATABASE_URL
 npm install                     # também gera o Prisma Client
 npm run db:deploy
+npm run db:seed                 # opcional: dados de demonstração
 npm run start:dev
 ```
+
+## Dados de demonstração
+
+`npm run db:seed` cria a **Padaria Pão Feliz Ltda** com 12 insumos (3 abaixo do mínimo), 4 gastos indiretos, 4 receitas, 4 produções e 8 vendas (concluídas, uma pendente e uma cancelada) espalhadas pelos últimos 6 meses. Login: **`joao@padariapaofeliz.com.br` / `123456`** (ou `maria@padariapaofeliz.com.br`, mesma senha), com os dados na mesma empresa.
+
+O seed (`prisma/seed.ts`) é idempotente: apaga e recria os dados da empresa do seed (achada pelo CNPJ), sem tocar nas outras. Os custos são calculados com as funções de `domain/` dos módulos, então batem com os da API (ex.: Pão Francês com custo de produção R$ 8.438,31, unitário R$ 168,77 e preço sugerido R$ 270,03). Recusa rodar com `NODE_ENV=production`. Com Docker: `docker compose exec api npm run db:seed`.
 
 ## Scripts
 
@@ -38,6 +45,7 @@ npm run start:dev
 | `npm test` | testes unitários (Vitest) |
 | `npm run test:e2e` | testes e2e no banco `lucroai_test` (precisa do Postgres do Compose no ar) |
 | `npm run db:generate` / `db:migrate` / `db:deploy` | Prisma: gerar client, criar migration, aplicar migrations |
+| `npm run db:seed` | dados de demonstração (Padaria Pão Feliz), idempotente |
 
 ## Variáveis de ambiente
 

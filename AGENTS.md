@@ -40,6 +40,7 @@ npx vitest run caminho/arquivo.spec.ts  # um arquivo só
 npm run db:migrate -- --name <nome>     # cria e aplica migration
 npm run db:deploy                       # aplica as migrations existentes
 npm run db:generate                     # regenera o Prisma Client
+npm run db:seed                         # dados de demonstração (idempotente): joao@padariapaofeliz.com.br / 123456
 ```
 
 Antes de dizer que terminou: `npm run lint && npm run format:check && npm run build && npm test` precisam passar (é o que o CI roda). Se mexeu em controller, rota, banco ou contrato, rode também `npm run test:e2e`.
@@ -59,7 +60,7 @@ Antes de dizer que terminou: `npm run lint && npm run format:check && npm run bu
 1. **Siga a estrutura de módulo** de [docs/architecture.md](docs/architecture.md#estrutura-de-um-módulo). Não crie pastas ou camadas novas sem atualizar a documentação no mesmo PR.
 2. **Fórmulas e regras que dependem só de valores ficam em funções puras** em `domain/<modulo>.calculos.ts`, com teste. Entidade de classe só na `Venda` (status com transições).
 3. **Repositório concreto**: `infra/repositories/<entidade>.repository.ts`, injetado pela classe. Sem interface de repositório e sem token `Symbol`.
-4. **Só o repositório acessa o Prisma**, e só as tabelas do próprio módulo ([mapa de módulos](docs/architecture.md#mapa-de-módulos)).
+4. **Só o repositório acessa o Prisma**, e só as tabelas do próprio módulo ([mapa de módulos](docs/architecture.md#mapa-de-módulos)). A única exceção é o seed (`prisma/seed.ts`).
 5. **Controllers são finos**: recebem DTO e `@CurrentUser()`, chamam um método do service e devolvem o DTO de saída.
 6. **Um módulo só usa de outro os services exportados** (e as funções puras de `domain/<modulo>.calculos.ts` de um módulo do qual depende). Nada de importar `application/` ou `infra/` de outro módulo, nem criar dependência circular.
 7. **Transação entre módulos** com `TransactionManager.run()`, passando o `tx` como último parâmetro aos services e repositórios.
