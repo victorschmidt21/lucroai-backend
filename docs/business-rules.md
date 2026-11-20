@@ -75,7 +75,7 @@ Origem do cadastro: `catalog-service/src/modules/gastos-indiretos/` (`create-gas
 - `valor` é gravado como veio, sem `round2`, como no catalog-service; o arredondamento acontece no rateio.
 - Listagem por `id` decrescente (o mais novo primeiro), como hoje. `PUT` com campos opcionais: campo omitido mantém o valor salvo.
 - Gasto de outra empresa ou inexistente → 404 `GASTO_INDIRETO_NAO_ENCONTRADO`.
-- Excluir um gasto não apaga os rateios das produções antigas: a FK `rateio_producao.gasto_indireto_id` é `SET NULL` e o rateio guarda a `descricao` (BE-05).
+- Excluir um gasto não apaga os rateios das produções antigas: `rateio_producao.gasto_indireto_id` não tem FK e guarda o id, como nos microsserviços, e o rateio guarda a `descricao`. **Muda (BE-12):** a BE-05 previa `SET NULL`, mas o `gastoIndiretoId` nulo quebraria o schema do frontend (`z.number().int()`, que mostra "Gasto #id").
 - Para outros módulos, `GastoIndiretoService` exporta `listarPorEmpresa(empresaId, tx?)` e `buscarVariosDaEmpresa(ids, empresaId, tx?)`. Este último ignora ids repetidos, devolve `[]` para lista vazia e responde 404 se algum id não existir ou for de outra empresa (base da correção da lacuna 11, aplicada na produção pela BE-12).
 
 Rateio de um gasto para `lotes` lotes de uma receita com `totalUnidades = lotes × rendimento`:
@@ -190,12 +190,15 @@ entrada: saldo = round6(saldo + quantidade)
 saída:   saldo = round6(saldo − quantidade)          // pode ficar negativo
 ```
 
-- Toda mudança de saldo grava uma movimentação (`tipo`, `origem`, `quantidade`, `referenciaId`) **na mesma transação**.
-- Entrada manual: `quantidade ≥ 0.000001`, origem `COMPRA`. **Muda (BE-11, lacuna 22):** aceita `observacao` (opcional, até 200).
-- Baixa por produção: para cada item da receita, `quantidade = round6(item.quantidade × lotes)`, origem `PRODUCAO`, `referenciaId` = id da produção.
+- Funções puras em `estoque/domain/estoque.calculos.ts`: `calcularSaldoAposMovimentacao(saldo, tipo, quantidade)` e `calcularQuantidadeBaixa(quantidadePorLote, lotes)`.
+- Toda mudança de saldo grava uma movimentação (`tipo`, `origem`, `quantidade`, `referenciaId`) **na mesma transação**. A linha do estoque é travada (`SELECT ... FOR UPDATE`) antes de ler o saldo, para duas movimentações simultâneas não perderem uma atualização.
+- Insumo inexistente ou de outra empresa → 404 `INSUMO_NAO_ENCONTRADO` "Insumo não encontrado", conferido pelo `empresa_id` do próprio estoque. Como todo insumo nasce com o registro de estoque (BE-07), não existe mais a resposta com `id: 0` do operations-service para insumo sem registro.
+- `GET /estoque/insumos` (BE-11, lacuna 5) devolve um item por insumo da empresa, inclusive os sem movimentação, em ordem de `insumoId`.
+- Entrada manual: `quantidade ≥ 0.000001`, origem `COMPRA`; a movimentação grava a quantidade como veio (só o saldo leva `round6`). Responde 201. **Muda (BE-11, lacuna 22):** aceita `observacao` (opcional, até 200, aparada; vazia vira `null`).
+- Baixa por produção (`EstoqueService.baixarPorProducao`, dentro da `tx` da produção): para cada item da receita, `quantidade = round6(item.quantidade × lotes)`, origem `PRODUCAO`, `referenciaId` = id da produção.
 - **Saldo negativo é aceito** (lacuna 10, mantida na BE-11). Bloquear a produção sem saldo é decisão de produto e pede uma issue própria.
-- Estoque mínimo começa em 0. **Muda (BE-11, lacuna 14):** `PATCH /estoque/insumos/:id/minimo` define o mínimo (≥ 0).
-- Movimentações listadas da mais recente para a mais antiga.
+- Estoque mínimo começa em 0. **Muda (BE-11, lacuna 14):** `PATCH /estoque/insumos/:id/minimo` define o mínimo (≥ 0), sem movimentação; responde 200.
+- Movimentações listadas da mais recente para a mais antiga (o `id` desempata).
 
 ## Produções
 
@@ -215,6 +218,9 @@ custoUnitario   = totalUnidades > 0 ? round2(custoTotal / totalUnidades) : 0
 - O `custoProducao` salvo da receita já contém o custo invisível de 1 lote com todos os gastos (lacuna 18). Por isso os gastos rateados na produção entram **de novo** no `custoTotal`. É o comportamento atual e fica mantido junto com a lacuna 18.
 - Efeitos, **numa transação só** no monolito (BE-12): grava a produção e os rateios, dá baixa nos insumos (seção anterior) e dá entrada de `totalUnidades` no estoque de produto acabado da receita. Hoje são chamadas HTTP e eventos sem compensação.
 - **Muda (BE-12):** a receita e os gastos precisam ser da empresa do token (lacuna 11); a produção grava `totalUnidades` (lacuna 23) e a descrição do gasto em cada rateio.
+- **Muda (BE-12):** id repetido em `gasto_indireto_ids` conta uma vez (`buscarVariosDaEmpresa`); hoje cada repetição soma o rateio de novo.
+- Função pura `calcularProducao(receita, lotes, gastos)` em `producoes/domain/producoes.calculos.ts`, com o `calcularValorRateado` da BE-08. Os rateios saem na ordem dos gastos (com o id omitido, a de `GET /gastos-indiretos`: id decrescente).
+- Uma falha em qualquer passo (ex.: insumo sem registro de estoque → 404) desfaz tudo: produção, rateios, baixas e entrada de produto acabado.
 
 ## Estoque de produto acabado
 
@@ -227,7 +233,9 @@ saída por venda:      se saldo < quantidade → erro "Estoque insuficiente..."
 ```
 
 - Um saldo por receita, com movimentações (`ENTRADA` na produção, `SAIDA` na venda).
-- **Muda (BE-12):** a falta de saldo responde 422 `ESTOQUE_INSUFICIENTE` (hoje é 400 dentro do consumidor do evento), e a mensagem continua começando com "Estoque insuficiente", que o frontend detecta. Nova rota `GET /estoque/produtos` (lacuna 6).
+- **Muda (BE-12):** a falta de saldo responde 422 `ESTOQUE_INSUFICIENTE` (hoje é 400 dentro do consumidor do evento), com a mesma mensagem de hoje: "Estoque insuficiente para a receita {id}: disponível {saldo}, solicitado {quantidade}", que o frontend detecta. Nova rota `GET /estoque/produtos` (lacuna 6).
+- `EstoqueProdutoAcabadoService` (módulo `estoque`): `entradaPorProducao(receitaId, totalUnidades, producaoId, empresaId, tx)` cria o saldo zerado na primeira produção e `saidaPorVenda(receitaId, quantidade, vendaId, empresaId, tx)` é a baixa da venda (BE-13). Os dois rodam na transação de quem chama, com a linha travada (`FOR UPDATE`), e gravam a movimentação (`ENTRADA/PRODUCAO` ou `SAIDA/VENDA`, `referenciaId` = id da produção ou da venda, quantidade como veio). Receita sem saldo vale 0 na saída.
+- Função pura `calcularSaidaProdutoAcabado(receitaId, disponivel, quantidade)` em `estoque/domain/estoque.calculos.ts`; a entrada usa `calcularSaldoAposMovimentacao`.
 
 ## Vendas
 
@@ -241,12 +249,14 @@ status inicial   = PENDENTE
 ```
 
 - Item: `receita_id` inteiro > 0, `quantidade` inteiro > 0, `preco_unitario_real` > 0 com até 2 casas.
-- Transições: só `PENDENTE` muda, para `CONCLUIDA` ou `CANCELADA`. Qualquer outro caso → "Venda já finalizada não pode ser alterada". **Muda (BE-13):** o status passa de 400 para 422.
+- Receita sem `custoUnitario` salvo → `custoUnitario` e `margemRealizada` do item ficam `null` (a venda é registrada mesmo assim). A margem pode ser negativa (preço abaixo do custo).
+- Transições: só `PENDENTE` muda, para `CONCLUIDA` ou `CANCELADA`. Venda `CONCLUIDA` ou `CANCELADA` → 422 `VENDA_FINALIZADA` "Venda já finalizada não pode ser alterada". **Muda (BE-13):** o status passa de 400 para 422, e `PENDENTE` → `PENDENTE` (hoje aceito sem efeito) dá 422 `TRANSICAO_INVALIDA` "Venda pendente só pode ser concluída ou cancelada".
 - O registro não confere o estoque (lacuna 24, mantida): a barreira é a conclusão.
 - **Muda (BE-13):** concluir dá baixa de cada item no produto acabado **na mesma transação** da mudança de status. Sem saldo → 422 "Estoque insuficiente..." e a venda continua `PENDENTE` (lacuna 9). Hoje a baixa é assíncrona e a venda fica `CONCLUIDA` mesmo sem saldo.
 - **Muda (BE-13):** `itens` não pode ser vazio (lacuna 25); a receita precisa ser da empresa (lacuna 26); filtros inválidos dão 400 (lacuna 8).
-- Listagem: filtros `status`, `dataInicio` (`dataVenda ≥`) e `dataFim` (`dataVenda ≤`), da mais recente para a mais antiga (`prisma-venda.repository.ts`, `findAll`).
-- `Venda` é a única entidade de classe do projeto (BE-13): total, margem e transições de status ficam nela.
+- A conclusão percorre os itens na ordem em que foram gravados, chamando `EstoqueProdutoAcabadoService.saidaPorVenda` (trava a linha do saldo; `SAIDA/VENDA`, `referenciaId` = id da venda, uma movimentação por item). Vários itens da mesma receita somam: o segundo já vê o saldo descontado do primeiro. A mudança de status usa `UPDATE ... WHERE status = 'PENDENTE'`: duas conclusões simultâneas da mesma venda não dão baixa duas vezes (a segunda recebe `VENDA_FINALIZADA`). Cancelar não mexe no estoque.
+- Listagem: filtros `status`, `dataInicio` (`dataVenda ≥`) e `dataFim` (`dataVenda ≤`), da mais recente para a mais antiga (`prisma-venda.repository.ts`, `findAll`); o `id` desempata. **Muda (BE-13, lacuna 7):** as datas precisam ter data, hora e fuso (`Z` ou `±hh:mm`), como a web envia (`toISOString()`); só a data → 400.
+- `Venda` é a única entidade de classe do projeto (BE-13, `vendas/domain/venda.entity.ts`): `Venda.nova` (margem, total e status inicial), `calcularMargemRealizada`, `calcularTotal` e `alterarStatus` (transições) ficam nela.
 
 ## Lacunas do backend atual
 

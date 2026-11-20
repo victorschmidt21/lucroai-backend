@@ -75,8 +75,11 @@ Observações:
 - `POST /gastos-indiretos` e `PUT /gastos-indiretos/:id`: `descricao` aparada, não vazia e com até 100 caracteres; `valor ≥ 0`; `metodo_rateio` do enum `MetodoRateio`. Gasto de outra empresa → 404 `GASTO_INDIRETO_NAO_ENCONTRADO`.
 - `POST /receitas` e `PUT /receitas/:id`: `nome` aparado, não vazio e com até 80 caracteres; `rendimento` inteiro > 0; `unidadeRendimento` do enum `UnidadeMedida`; `margem_lucro ≥ 0` (fração); `insumos` não vazio, com `insumo_id` inteiro > 0 e `quantidade ≥ 0.001`. Insumo de outra empresa → 404 `INSUMO_NAO_ENCONTRADO`; receita de outra empresa → 404 `RECEITA_NAO_ENCONTRADA`. No `PUT`, `margem_lucro: null` remove a margem e o preço sugerido. `DELETE` de receita usada em produção ou venda → 409 `RECEITA_EM_USO`.
 - `POST /receitas/:id/custo/simular`: `quantidadeLotes` inteiro > 0. `POST /receitas/:id/simular`: `novoCusto` e `novoPreco` > 0 e `volume` inteiro > 0, todos opcionais (omitidos usam o custo unitário, o preço sugerido e o rendimento salvos); sem custo → 400 `RECEITA_SEM_CUSTO`, sem preço → 400 `RECEITA_SEM_PRECO`, preço salvo 0 → 400 `PRECO_INVALIDO`. `POST /receitas/:id/preco-venda`: `margem_lucro ≥ 0`; receita sem custo → 400 `RECEITA_SEM_CUSTO`. As quatro rotas não gravam nada e dão 404 `RECEITA_NAO_ENCONTRADA` para receita de outra empresa.
-- `GET /producoes?receitaId=`: `receitaId` inteiro opcional; inválido → 400.
-- `GET /vendas`: `status` do enum `StatusVenda`; `dataInicio` e `dataFim` em ISO 8601 com data e hora (a web envia o início e o fim do dia local), comparados como instantes (`dataVenda ≥ dataInicio` e `≤ dataFim`). Qualquer filtro inválido → 400.
+- `GET /producoes?receitaId=`: `receitaId` inteiro > 0 opcional; inválido → 400 `DADOS_INVALIDOS`. Receita de outra empresa só devolve lista vazia.
+- `POST /producoes`: `receita_id` e `quantidade` (lotes) inteiros > 0; `gasto_indireto_ids` opcional, lista de inteiros > 0 (omitido rateia todos os gastos da empresa; `[]` não rateia nenhum; ids repetidos contam uma vez). Receita de outra empresa → 404 `RECEITA_NAO_ENCONTRADA`; gasto de outra empresa → 404 `GASTO_INDIRETO_NAO_ENCONTRADO`; produção de outra empresa no `GET /producoes/:id` → 404 `PRODUCAO_NAO_ENCONTRADA`. Saldo de insumo insuficiente não bloqueia (lacuna 10).
+- `GET /vendas`: `status` do enum `StatusVenda`; `dataInicio` e `dataFim` em ISO 8601 com data e hora (a web envia o início e o fim do dia local), comparados como instantes (`dataVenda ≥ dataInicio` e `≤ dataFim`). Qualquer filtro inválido → 400 `DADOS_INVALIDOS`; só a data (`2026-11-19`) ou data sem fuso também. Venda de outra empresa no `GET /vendas/:id` e no `PATCH` → 404 `VENDA_NAO_ENCONTRADA`.
+- `POST /vendas`: `itens` não vazio; `receita_id` e `quantidade` inteiros > 0; `preco_unitario_real` > 0 com até 2 casas. Receita de outra empresa → 404 `RECEITA_NAO_ENCONTRADA`. Não confere o estoque.
+- `PATCH /vendas/:id/status`: `status` do enum `StatusVenda`. Venda já `CONCLUIDA` ou `CANCELADA` → 422 `VENDA_FINALIZADA`; `PENDENTE` → `PENDENTE` → 422 `TRANSICAO_INVALIDA`; concluir sem saldo de produto acabado → 422 `ESTOQUE_INSUFICIENTE` e nada é gravado (a venda continua `PENDENTE`).
 
 ## Respostas
 
@@ -90,10 +93,10 @@ Observações:
 | `ReceitaCusto` | `quantidade_lotes`, `total_unidades`, `custo_invisivel`, `custo_total_producao`, `custo_por_unidade` |
 | `SimulacaoCenario` | `custoUnitario`, `precoVenda`, `volume`, `lucroEstimado`, `margemProjetada` (fração), `breakEven` |
 | `PrecoVenda` | `custo_total_unitario`, `preco_sugerido`, `lucro_por_unidade` |
-| `Estoque` | `id`, `insumoId`, `quantidadeDisponivel` (pode ser negativa), `quantidadeMinima`, `dataAlteracao` (`null` sem alteração) |
+| `Estoque` | `id`, `insumoId`, `quantidadeDisponivel` (pode ser negativa), `quantidadeMinima`, `dataAlteracao` (`null` sem alteração; no monolito vem preenchida desde a criação, pelo `@updatedAt`). O `id` nunca é 0: todo insumo nasce com o registro de estoque (BE-07) |
 | `MovimentacaoEstoque` | `id`, `insumoId`, `tipo` (`ENTRADA \| SAIDA`), `origem` (`COMPRA \| PRODUCAO`), `quantidade`, `referenciaId` (`null`), `observacao` (`null`, **novo**), `dataMovimentacao` |
-| `EstoqueProduto` (**novo**) | `receitaId`, `quantidadeDisponivel`, `dataAlteracao` |
-| `Producao` | `id`, `receitaId`, `empresaId`, `quantidade` (lotes), `totalUnidades` (**novo**), `custoTotal` (`null`), `custoUnitario` (`null`), `dataProducao`, `rateios: [{ gastoIndiretoId (`null` se o gasto foi excluído), descricao (**novo**), valorRateado }]` |
+| `EstoqueProduto` (**novo**) | `receitaId`, `quantidadeDisponivel`, `dataAlteracao`; um por receita que já teve produção, em ordem de `receitaId` |
+| `Producao` | `id`, `receitaId`, `empresaId`, `quantidade` (lotes), `totalUnidades` (**novo**), `custoTotal` (`null`), `custoUnitario` (`null`), `dataProducao`, `rateios: [{ gastoIndiretoId (o id continua depois da exclusão do gasto), descricao (**novo**), valorRateado }]`. Na resposta, `custoTotal` e `custoUnitario` sempre vêm preenchidos |
 | `Venda` | `id`, `empresaId`, `total` (`null`), `status`, `dataVenda`, `itens: [{ id, vendaId, receitaId, quantidade, precoUnitarioReal, custoUnitario (`null`), margemRealizada (`null`) }]` |
 | Login | `{ access_token }` |
 | Cadastro de empresa | `{ sub, email, nome, empresa: { id, nome, cnpj, segmento }, access_token }` |
@@ -128,7 +131,7 @@ Formato único, gerado pelo `AllExceptionsFilter` (`src/shared/infra/http/`), o 
 | 404 | `NotFoundError` | inexistente **ou de outra empresa** | `<ENTIDADE>_NAO_ENCONTRADO` |
 | 404 | exceção do Nest | rota inexistente | `RECURSO_NAO_ENCONTRADO` |
 | 409 | `ConflictError` | duplicidade ou registro em uso | `CNPJ_JA_CADASTRADO`, `EMAIL_JA_CADASTRADO`, `INSUMO_EM_USO`, `RECEITA_EM_USO` |
-| 422 | `BusinessRuleError` | entrada válida que viola uma regra | `ESTOQUE_INSUFICIENTE`, `VENDA_FINALIZADA` |
+| 422 | `BusinessRuleError` | entrada válida que viola uma regra | `ESTOQUE_INSUFICIENTE`, `VENDA_FINALIZADA`, `TRANSICAO_INVALIDA` |
 | 429 | `@nestjs/throttler` | limite de tentativas do `AuthController` (login e cadastro): 10 por minuto por IP e e-mail | `MUITAS_REQUISICOES` |
 | 503 | `GET /health` | banco fora do ar | `SERVICO_INDISPONIVEL` |
 | 500 | qualquer outro erro | falha inesperada | `ERRO_INTERNO` |

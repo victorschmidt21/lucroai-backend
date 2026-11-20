@@ -56,7 +56,7 @@ export class GastoIndiretoRepository {
     return this.prisma.gastoIndireto.update({ where: { id }, data });
   }
 
-  /** Os rateios das produções antigas ficam, com `gasto_indireto_id` nulo (`SET NULL`). */
+  /** Os rateios das produções antigas ficam, com o id do gasto e a descrição (sem FK, BE-12). */
   async delete(id: number): Promise<void> {
     await this.prisma.gastoIndireto.delete({ where: { id } });
   }

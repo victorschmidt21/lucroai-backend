@@ -39,12 +39,12 @@ Cada tabela pertence a **um** módulo, e só ele lê e escreve nela pelo Prisma.
 | Módulo | Tabelas (models) | Responsabilidade | Depende de | Issues |
 | --- | --- | --- | --- | --- |
 | `auth` | `Empresa`, `Usuario` | cadastro de empresa, login e JWT (assinado com o `JwtService` do `JwtAuthModule`); não exporta service | — | BE-06 |
-| `estoque` | `Estoque`, `MovimentacaoEstoque`, `EstoqueProdutoAcabado`, `MovimentacaoProdutoAcabado` | saldo e histórico de insumos e de produto acabado; exporta `EstoqueService` (`criarRegistroInicial` e `saldosPorInsumo` desde a BE-07) | — | BE-07, BE-11, BE-12 |
+| `estoque` | `Estoque`, `MovimentacaoEstoque`, `EstoqueProdutoAcabado`, `MovimentacaoProdutoAcabado` | saldo e histórico de insumos e de produto acabado; exporta `EstoqueService` (`criarRegistroInicial` e `saldosPorInsumo` desde a BE-07; `baixarPorProducao(itens, lotes, producaoId, empresaId, tx)` desde a BE-11) e `EstoqueProdutoAcabadoService` (`entradaPorProducao(receitaId, totalUnidades, producaoId, empresaId, tx)` e `saidaPorVenda(receitaId, quantidade, vendaId, empresaId, tx)` desde a BE-12) | — | BE-07, BE-11, BE-12 |
 | `insumos` | `Insumo` | cadastro de insumos e custo unitário; cria o estoque inicial na mesma transação; exporta `InsumoService` (`buscarVariosDaEmpresa` desde a BE-09) | `estoque` | BE-07 |
 | `gastos-indiretos` | `GastoIndireto` | cadastro de gastos e cálculo do rateio (`calcularValorRateado`); exporta `GastoIndiretoService` (`listarPorEmpresa` e `buscarVariosDaEmpresa`) | — | BE-08 |
 | `receitas` | `Receita`, `ItemReceita` | receitas, custo para 1 ou N lotes (`calcularCustoReceita`), simulação (`simularCenario`) e preço de venda (`calcularPrecoVenda`), sem gravar; exporta `ReceitaService` (`buscarDaEmpresa`) | `insumos`, `gastos-indiretos` | BE-09, BE-10 |
-| `producoes` | `Producao`, `RateioProducao` | produção com rateio, baixa de insumos e entrada de produto acabado | `receitas`, `gastos-indiretos`, `estoque` | BE-12 |
-| `vendas` | `Venda`, `ItemVenda` | vendas e conclusão com baixa de produto acabado | `receitas`, `estoque` | BE-13 |
+| `producoes` | `Producao`, `RateioProducao` | produção com rateio (`calcularProducao`), baixa de insumos e entrada de produto acabado, numa transação só; não exporta service | `receitas`, `gastos-indiretos`, `estoque` | BE-12 |
+| `vendas` | `Venda`, `ItemVenda` | vendas com a entidade `Venda` (total, margem e transições de status) e conclusão com baixa de produto acabado (`saidaPorVenda`) na mesma transação; não exporta service | `receitas`, `estoque` | BE-13 |
 
 ### Tabelas e donos
 
@@ -63,7 +63,7 @@ Schema em `prisma/schema.prisma`, migration inicial `init` (BE-05). Toda tabela 
 | `estoque_produto_acabado` (`EstoqueProdutoAcabado`) | `estoque` | `empresa_id`, `receita_id` (`CASCADE`, único) |
 | `movimentacao_produto_acabado` (`MovimentacaoProdutoAcabado`) | `estoque` | `empresa_id`, `receita_id` (`CASCADE`) |
 | `producao` (`Producao`) | `producoes` | `empresa_id`, `receita_id` (`RESTRICT`) |
-| `rateio_producao` (`RateioProducao`) | `producoes` | `producao_id` (`CASCADE`), `gasto_indireto_id` (`SET NULL`; o rateio guarda a `descricao` do gasto) |
+| `rateio_producao` (`RateioProducao`) | `producoes` | `producao_id` (`CASCADE`), `gasto_indireto_id` **sem FK** (BE-12: o id fica depois da exclusão do gasto, como nos microsserviços, porque o frontend espera um inteiro; o rateio guarda a `descricao` do gasto) |
 | `venda` (`Venda`) | `vendas` | `empresa_id` |
 | `item_venda` (`ItemVenda`) | `vendas` | `venda_id` (`CASCADE`), `receita_id` (`RESTRICT`) |
 
@@ -144,7 +144,7 @@ Só o módulo `vendas` tem também `domain/venda.entity.ts` (e o `venda.entity.s
      return this.transactionManager.run(async (tx) => {
        const producao = await this.producaoRepository.create({ ...calculo, empresaId }, tx);
        await this.estoqueService.baixarPorProducao(receita.itens, dto.quantidade, producao.id, empresaId, tx);
-       await this.estoqueService.entradaPorProducao(receita.id, calculo.totalUnidades, producao.id, empresaId, tx);
+       await this.estoqueProdutoAcabadoService.entradaPorProducao(receita.id, calculo.totalUnidades, producao.id, empresaId, tx);
        return toProducaoDto(producao);
      });
    }
@@ -395,7 +395,7 @@ export class GastoIndiretoService {
 
   async delete(id: number, empresaId: number): Promise<void> {
     await this.getOrFail(id, empresaId);
-    await this.repository.delete(id); // os rateios antigos ficam, com gasto_indireto_id nulo (BE-05)
+    await this.repository.delete(id); // os rateios antigos ficam, com o id e a descrição do gasto (sem FK, BE-12)
   }
 
   /** Para outros módulos: todos os gastos da empresa. */
