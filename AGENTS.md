@@ -23,6 +23,7 @@ O produto é inicial: entregue rápido e simples. O padrão de módulo é **mais
 | Testes | Vitest + Supertest |
 | Lint / formatação | oxlint + Prettier |
 | Infra local | Docker Compose (`api` na 3100 + `postgres` na 55640) |
+| Produção | imagem `Dockerfile` (target `production`) + Postgres gerenciado, em qualquer provedor de containers ([docs/deploy.md](docs/deploy.md)) |
 
 ## Comandos
 
@@ -41,6 +42,7 @@ npm run db:migrate -- --name <nome>     # cria e aplica migration
 npm run db:deploy                       # aplica as migrations existentes
 npm run db:generate                     # regenera o Prisma Client
 npm run db:seed                         # dados de demonstração (idempotente): joao@padariapaofeliz.com.br / 123456
+docker build --target production -t lucroai-backend .  # imagem de produção (aplica as migrations ao subir)
 ```
 
 Antes de dizer que terminou: `npm run lint && npm run format:check && npm run build && npm test` precisam passar (é o que o CI roda). Se mexeu em controller, rota, banco ou contrato, rode também `npm run test:e2e`.
@@ -52,6 +54,7 @@ Antes de dizer que terminou: `npm run lint && npm run format:check && npm run bu
 | [docs/architecture.md](docs/architecture.md) | criar ou alterar um módulo: camadas, mapa de módulos (com o dono de cada tabela), comunicação entre módulos, transações, banco e o **exemplo completo** (`gastos-indiretos`) |
 | [docs/api.md](docs/api.md) | criar ou alterar uma rota: o contrato com o frontend (rotas, corpos, respostas, `null` × omitido), status e formato de erro |
 | [docs/business-rules.md](docs/business-rules.md) | implementar qualquer cálculo ou regra: fórmulas, arredondamentos, validações, com o arquivo de origem nos microsserviços, e o destino de cada lacuna do backend atual |
+| [docs/deploy.md](docs/deploy.md) | mexer no `Dockerfile`, nas variáveis de ambiente ou no deploy: imagem de produção (migrations ao subir, sem root, healthcheck), variáveis de produção, corte do frontend e aposentadoria dos microsserviços |
 | Frontend: `docs/api-integration.md` e `src/shared/api/contracts/` | conferir como o frontend chama a rota e o schema Zod que valida a resposta |
 | Microsserviços: `services/<servico>/src/modules/<modulo>/` | conferir o comportamento atual (o código prevalece sobre o `OVERVIEW.md` de lá) |
 
