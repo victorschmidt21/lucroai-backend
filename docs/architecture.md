@@ -46,6 +46,29 @@ Cada tabela pertence a **um** módulo, e só ele lê e escreve nela pelo Prisma.
 | `producoes` | `Producao`, `RateioProducao` | produção com rateio, baixa de insumos e entrada de produto acabado | `receitas`, `gastos-indiretos`, `estoque` | BE-12 |
 | `vendas` | `Venda`, `ItemVenda` | vendas e conclusão com baixa de produto acabado | `receitas`, `estoque` | BE-13 |
 
+### Tabelas e donos
+
+Schema em `prisma/schema.prisma`, migration inicial `init` (BE-05). Toda tabela de negócio raiz tem `empresa_id` com FK para `empresa` e índice; as tabelas de itens (`item_receita`, `rateio_producao`, `item_venda`) herdam a empresa do pai.
+
+| Tabela (model) | Módulo dono | Chaves estrangeiras (`ON DELETE`) |
+| --- | --- | --- |
+| `empresa` (`Empresa`) | `auth` | — |
+| `usuario` (`Usuario`) | `auth` | `empresa_id` (`CASCADE`) |
+| `insumo` (`Insumo`) | `insumos` | `empresa_id` |
+| `gasto_indireto` (`GastoIndireto`) | `gastos-indiretos` | `empresa_id` |
+| `receita` (`Receita`) | `receitas` | `empresa_id` |
+| `item_receita` (`ItemReceita`) | `receitas` | `receita_id` (`CASCADE`), `insumo_id` (`RESTRICT` → 409 `INSUMO_EM_USO`) |
+| `estoque` (`Estoque`) | `estoque` | `empresa_id`, `insumo_id` (`CASCADE`, único) |
+| `movimentacao_estoque` (`MovimentacaoEstoque`) | `estoque` | `empresa_id`, `insumo_id` (`CASCADE`) |
+| `estoque_produto_acabado` (`EstoqueProdutoAcabado`) | `estoque` | `empresa_id`, `receita_id` (`CASCADE`, único) |
+| `movimentacao_produto_acabado` (`MovimentacaoProdutoAcabado`) | `estoque` | `empresa_id`, `receita_id` (`CASCADE`) |
+| `producao` (`Producao`) | `producoes` | `empresa_id`, `receita_id` (`RESTRICT`) |
+| `rateio_producao` (`RateioProducao`) | `producoes` | `producao_id` (`CASCADE`), `gasto_indireto_id` (`SET NULL`; o rateio guarda a `descricao` do gasto) |
+| `venda` (`Venda`) | `vendas` | `empresa_id` |
+| `item_venda` (`ItemVenda`) | `vendas` | `venda_id` (`CASCADE`), `receita_id` (`RESTRICT`) |
+
+`empresa_id` sem indicação é `RESTRICT` (padrão do Prisma): excluir empresa não é uma funcionalidade. A exclusão de insumo leva junto o saldo e as movimentações de estoque dele, e a de receita leva o saldo e as movimentações de produto acabado (quando não há produção nem venda, que a bloqueiam).
+
 **Sem ciclos.** Se A depende de B, B não depende de A. O `estoque` não depende de `insumos`: ele confere a empresa pelo `empresa_id` do próprio registro de estoque (BE-05). Ao criar um módulo ou uma dependência, atualize esta tabela no mesmo PR.
 
 A única exceção ao dono da tabela é o seed (`prisma/seed.ts`, BE-14), que grava tudo com o Prisma direto e calcula os custos com as funções de `domain/` dos módulos.

@@ -29,6 +29,7 @@ Valores e quantidades são `Float` no banco (`double precision`) e `number` na A
 | `StatusVenda` | `PENDENTE`, `CONCLUIDA`, `CANCELADA` |
 | `TipoMovimentacaoEstoque` | `ENTRADA`, `SAIDA` |
 | `OrigemMovimentacaoEstoque` | `COMPRA`, `PRODUCAO` |
+| `OrigemMovimentacaoProdutoAcabado` (**novo**, BE-05) | `PRODUCAO`, `VENDA` |
 
 ## Multiempresa
 
