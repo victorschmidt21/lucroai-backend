@@ -1,0 +1,10 @@
+// Schema único do monolito. Os models entram a partir da BE-05.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
