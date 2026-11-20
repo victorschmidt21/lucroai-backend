@@ -65,6 +65,7 @@ custoUnitario = quantidadeBaseCusto > 0 ? valorPago / quantidadeBaseCusto : 0
 - Listagem ordenada por nome (e por id no empate), sem paginação. Hoje a ordem é a do banco.
 - `PATCH` aceita só `nome`, `quantidadeBaseCusto`, `unidade` e `valorPago`; campo omitido mantém o valor salvo. O saldo muda só pelo estoque.
 - Excluir o insumo leva junto o estoque e as movimentações dele (`CASCADE`). Usado em receita → 409 `INSUMO_EM_USO` "Insumo usado em receitas não pode ser excluído" (P2003 da FK `RESTRICT`, traduzido no `InsumoRepository`).
+- Para outros módulos, `InsumoService` exporta `buscarVariosDaEmpresa(ids, empresaId)` (BE-09): ignora ids repetidos e responde 404 `INSUMO_NAO_ENCONTRADO` se algum não existir ou for de outra empresa.
 
 ## Gastos indiretos e rateio
 
@@ -107,21 +108,25 @@ precoSugerido    = round2(custoUnitario × (1 + margem))                 // só 
 ```
 
 - **Custo invisível (lacuna 18, mantida na BE-09):** soma o rateio de **todos** os gastos indiretos da empresa, não só dos escolhidos. Com o Aluguel de R$ 1.800 `FIXO`, o custo de produção de toda receita sobe R$ 1.800. Mudar a regra pede uma issue própria, porque muda os números que o frontend mostra.
-- O resultado do custo invisível precisa ser finito e ≥ 0, senão 400 (`obterCustoInvisivel`). Com valores ≥ 0 validados no cadastro, isso não acontece.
-- Rendimento ≤ 0 → 400 "Rendimento da receita deve ser maior que zero" (`validarRendimento`). O DTO já exige inteiro positivo.
+- O resultado do custo invisível precisa ser finito e ≥ 0, senão 400 (`obterCustoInvisivel`). Com valores ≥ 0 validados no cadastro, isso não acontece, e o monolito não repete a conferência.
+- Rendimento ≤ 0 → 400 `RENDIMENTO_INVALIDO` "Rendimento da receita deve ser maior que zero" (`validarRendimento`). O DTO já exige inteiro positivo.
+- Funções puras em `receitas/domain/receitas.calculos.ts` (BE-09): `calcularCustoItem`, `calcularCustoInvisivel` (usa `calcularValorRateado` de `gastos-indiretos`), `calcularPrecoSugerido`, `calcularCustoReceita` (1 lote), `resolverMargem` e `precisaRecalcular`. O service busca os insumos por `InsumoService.buscarVariosDaEmpresa` e os gastos por `GastoIndiretoService.listarPorEmpresa`, sem HTTP.
 - Margem é **fração** (`0.6` = 60%), `≥ 0`.
 - O item guarda `custoCalculado` para 1 lote. A receita guarda `custoProducao`, `custoUnitario`, `margemLucro` e `precoSugerido`; sem valor, esses campos são **omitidos** na resposta.
-- Validação do corpo (`create-receita.dto.ts`): nome até 80, `rendimento` inteiro > 0, `quantidade` do item ≥ 0.001, `insumo_id` inteiro > 0. **Muda (BE-09):** a lista de insumos não pode ser vazia, e os insumos precisam ser da empresa (404).
+- Validação do corpo (`create-receita.dto.ts`): nome até 80, `rendimento` inteiro > 0, `quantidade` do item ≥ 0.001, `insumo_id` inteiro > 0. **Muda (BE-09):** a lista de insumos não pode ser vazia (400), os insumos precisam ser da empresa (404 `INSUMO_NAO_ENCONTRADO`), e o nome passa a ser aparado e obrigatório (como o do insumo e o do gasto).
+- Receita inexistente ou de outra empresa → 404 `RECEITA_NAO_ENCONTRADA` "Receita não encontrada". Listagem por `dataCriacao` decrescente (e `id` no empate); itens na ordem em que foram informados.
+- Para outros módulos, `ReceitaService` exporta `buscarDaEmpresa(id, empresaId, tx?)`, que devolve a `Receita` com os itens (404 se não for da empresa), para as BE-12 e BE-13.
 
 ### Edição
 
 Origem: `recipe-service/src/modules/receitas/application/services/receita.service.ts` (`update`).
 
-- Campo omitido mantém o valor salvo.
-- O custo só é recalculado se vierem `insumos`, `rendimento` ou `margem_lucro`. Mudar só `nome` ou `unidadeRendimento` mantém os custos salvos.
+- Campo omitido mantém o valor salvo (`null` em `nome`, `rendimento`, `unidadeRendimento` ou `insumos` também mantém; só `margem_lucro` trata `null` como valor).
+- Com `insumos`, todos os itens são trocados pelos novos, no mesmo update (atômico).
+- O custo só é recalculado se vierem `insumos`, `rendimento` ou `margem_lucro` (inclusive `null`). O recálculo usa os custos atuais dos insumos e os gastos atuais da empresa, inclusive para os itens já salvos. Mudar só `nome` ou `unidadeRendimento` mantém os custos salvos.
 - **Muda (BE-09, lacuna 21):** `margem_lucro: null` remove a margem **e** o preço sugerido.
 - Mudar o custo de um insumo **não** recalcula as receitas que o usam: o custo é recalculado quando a receita é salva de novo (comportamento atual, mantido).
-- **Muda (BE-09):** excluir receita usada em produção ou venda → 409 `RECEITA_EM_USO`.
+- **Muda (BE-09):** excluir receita usada em produção ou venda → 409 `RECEITA_EM_USO` "Receita usada em produções ou vendas não pode ser excluída" (P2003 das FKs `RESTRICT` de `producao` e `item_venda`, traduzido no `ReceitaRepository`). Os itens e o estoque de produto acabado vão junto (`CASCADE`).
 
 ### Custo para N lotes
 

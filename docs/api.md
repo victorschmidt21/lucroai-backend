@@ -73,6 +73,7 @@ Observações:
 - `POST /auth/login` e `POST /auth/empresa`: `email` é aparado e passado para minúsculas antes da validação (`@IsEmail`).
 - `POST /insumos` e `PATCH /insumos/:id`: `nome` aparado, não vazio e com até 80 caracteres; `quantidadeBaseCusto ≥ 0.000001`; `valorPago ≥ 0`; `unidade` do enum `UnidadeMedida`; `quantidadeDisponivelInicial ≥ 0` só no `POST` (no `PATCH` → 400). `DELETE` de insumo usado em receita → 409 `INSUMO_EM_USO`.
 - `POST /gastos-indiretos` e `PUT /gastos-indiretos/:id`: `descricao` aparada, não vazia e com até 100 caracteres; `valor ≥ 0`; `metodo_rateio` do enum `MetodoRateio`. Gasto de outra empresa → 404 `GASTO_INDIRETO_NAO_ENCONTRADO`.
+- `POST /receitas` e `PUT /receitas/:id`: `nome` aparado, não vazio e com até 80 caracteres; `rendimento` inteiro > 0; `unidadeRendimento` do enum `UnidadeMedida`; `margem_lucro ≥ 0` (fração); `insumos` não vazio, com `insumo_id` inteiro > 0 e `quantidade ≥ 0.001`. Insumo de outra empresa → 404 `INSUMO_NAO_ENCONTRADO`; receita de outra empresa → 404 `RECEITA_NAO_ENCONTRADA`. No `PUT`, `margem_lucro: null` remove a margem e o preço sugerido. `DELETE` de receita usada em produção ou venda → 409 `RECEITA_EM_USO`.
 - `GET /producoes?receitaId=`: `receitaId` inteiro opcional; inválido → 400.
 - `GET /vendas`: `status` do enum `StatusVenda`; `dataInicio` e `dataFim` em ISO 8601 com data e hora (a web envia o início e o fim do dia local), comparados como instantes (`dataVenda ≥ dataInicio` e `≤ dataFim`). Qualquer filtro inválido → 400.
 
