@@ -59,5 +59,8 @@
     "supertest": "^7.0.0",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"
+  },
+  "overrides": {
+    "effect": "^3.22.5"
   }
 }
