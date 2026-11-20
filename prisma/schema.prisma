@@ -118,8 +118,7 @@ model GastoIndireto {
   valor        Float
   metodoRateio MetodoRateio @map("metodo_rateio")
 
-  empresa Empresa          @relation(fields: [empresaId], references: [id])
-  rateios RateioProducao[]
+  empresa Empresa @relation(fields: [empresaId], references: [id])
 
   @@index([empresaId])
   @@map("gasto_indireto")
@@ -272,14 +271,14 @@ model Producao {
 model RateioProducao {
   id              Int    @id @default(autoincrement())
   producaoId      Int    @map("producao_id")
-  /// Nulo quando o gasto foi excluído depois da produção
-  gastoIndiretoId Int?   @map("gasto_indireto_id")
+  /// Sem FK (BE-12): o id fica mesmo depois de o gasto ser excluído, como nos
+  /// microsserviços; o frontend espera um inteiro e mostra "Gasto #id"
+  gastoIndiretoId Int    @map("gasto_indireto_id")
   /// Cópia da descrição do gasto na hora da produção
   descricao       String @db.VarChar(100)
   valorRateado    Float  @map("valor_rateado")
 
-  producao      Producao       @relation(fields: [producaoId], references: [id], onDelete: Cascade)
-  gastoIndireto GastoIndireto? @relation(fields: [gastoIndiretoId], references: [id], onDelete: SetNull)
+  producao Producao @relation(fields: [producaoId], references: [id], onDelete: Cascade)
 
   @@index([producaoId])
   @@index([gastoIndiretoId])
