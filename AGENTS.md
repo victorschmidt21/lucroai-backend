@@ -17,12 +17,13 @@ O produto é inicial: entregue rápido e simples. O padrão de módulo é **mais
 | Runtime | Node.js 24, ESM (`"type": "module"`) |
 | Framework | NestJS 12, TypeScript `strict` |
 | Banco | PostgreSQL 17 + Prisma ORM 7 (`@prisma/adapter-pg`) |
-| Validação | `class-validator` / `class-transformer` (DTOs), Zod (só variáveis de ambiente) |
+| Validação | `class-validator` / `class-transformer` (DTOs), Zod (variáveis de ambiente e a cópia dos contratos do frontend no teste de contrato) |
 | Autenticação | JWT HS256 (`@nestjs/jwt`), senha com `argon2`, limite de tentativas com `@nestjs/throttler` no `AuthController` |
 | Documentação da API | `@nestjs/swagger` com CLI plugin, em `/docs` |
 | Testes | Vitest + Supertest |
 | Lint / formatação | oxlint + Prettier |
 | Infra local | Docker Compose (`api` na 3100 + `postgres` na 55640) |
+| Produção | imagem `Dockerfile` (target `production`) + Postgres gerenciado, em qualquer provedor de containers ([docs/deploy.md](docs/deploy.md)) |
 
 ## Comandos
 
@@ -35,11 +36,13 @@ npm run format                          # Prettier (escreve)
 npm run format:check                    # Prettier (só verifica)
 npm run build                           # compila para dist/
 npm test                                # testes unitários (src/**/*.spec.ts)
-npm run test:e2e                        # e2e no banco lucroai_test (precisa do Postgres no ar)
+npm run test:e2e                        # e2e no banco lucroai_test, inclusive o de contrato (precisa do Postgres no ar)
 npx vitest run caminho/arquivo.spec.ts  # um arquivo só
 npm run db:migrate -- --name <nome>     # cria e aplica migration
 npm run db:deploy                       # aplica as migrations existentes
 npm run db:generate                     # regenera o Prisma Client
+npm run db:seed                         # dados de demonstração (idempotente): joao@padariapaofeliz.com.br / 123456
+docker build --target production -t lucroai-backend .  # imagem de produção (aplica as migrations ao subir)
 ```
 
 Antes de dizer que terminou: `npm run lint && npm run format:check && npm run build && npm test` precisam passar (é o que o CI roda). Se mexeu em controller, rota, banco ou contrato, rode também `npm run test:e2e`.
@@ -51,6 +54,7 @@ Antes de dizer que terminou: `npm run lint && npm run format:check && npm run bu
 | [docs/architecture.md](docs/architecture.md) | criar ou alterar um módulo: camadas, mapa de módulos (com o dono de cada tabela), comunicação entre módulos, transações, banco e o **exemplo completo** (`gastos-indiretos`) |
 | [docs/api.md](docs/api.md) | criar ou alterar uma rota: o contrato com o frontend (rotas, corpos, respostas, `null` × omitido), status e formato de erro |
 | [docs/business-rules.md](docs/business-rules.md) | implementar qualquer cálculo ou regra: fórmulas, arredondamentos, validações, com o arquivo de origem nos microsserviços, e o destino de cada lacuna do backend atual |
+| [docs/deploy.md](docs/deploy.md) | mexer no `Dockerfile`, nas variáveis de ambiente ou no deploy: imagem de produção (migrations ao subir, sem root, healthcheck), variáveis de produção, corte do frontend e aposentadoria dos microsserviços |
 | Frontend: `docs/api-integration.md` e `src/shared/api/contracts/` | conferir como o frontend chama a rota e o schema Zod que valida a resposta |
 | Microsserviços: `services/<servico>/src/modules/<modulo>/` | conferir o comportamento atual (o código prevalece sobre o `OVERVIEW.md` de lá) |
 
@@ -59,7 +63,7 @@ Antes de dizer que terminou: `npm run lint && npm run format:check && npm run bu
 1. **Siga a estrutura de módulo** de [docs/architecture.md](docs/architecture.md#estrutura-de-um-módulo). Não crie pastas ou camadas novas sem atualizar a documentação no mesmo PR.
 2. **Fórmulas e regras que dependem só de valores ficam em funções puras** em `domain/<modulo>.calculos.ts`, com teste. Entidade de classe só na `Venda` (status com transições).
 3. **Repositório concreto**: `infra/repositories/<entidade>.repository.ts`, injetado pela classe. Sem interface de repositório e sem token `Symbol`.
-4. **Só o repositório acessa o Prisma**, e só as tabelas do próprio módulo ([mapa de módulos](docs/architecture.md#mapa-de-módulos)).
+4. **Só o repositório acessa o Prisma**, e só as tabelas do próprio módulo ([mapa de módulos](docs/architecture.md#mapa-de-módulos)). A única exceção é o seed (`prisma/seed.ts`).
 5. **Controllers são finos**: recebem DTO e `@CurrentUser()`, chamam um método do service e devolvem o DTO de saída.
 6. **Um módulo só usa de outro os services exportados** (e as funções puras de `domain/<modulo>.calculos.ts` de um módulo do qual depende). Nada de importar `application/` ou `infra/` de outro módulo, nem criar dependência circular.
 7. **Transação entre módulos** com `TransactionManager.run()`, passando o `tx` como último parâmetro aos services e repositórios.
@@ -144,7 +148,7 @@ Antes de dizer que terminou: `npm run lint && npm run format:check && npm run bu
 Política do produto inicial:
 
 - **Unitário** só das funções de `domain/` (fórmulas e regras) e da entidade `Venda`. Cada ramo de uma fórmula tem um caso, com os números conferidos nos microsserviços.
-- **E2E** só no teste de fumaça (`test/health.e2e-spec.ts`, BE-01) e no teste de contrato com o frontend (`test/contrato.e2e-spec.ts`, BE-15).
+- **E2E** só no teste de fumaça (`test/health.e2e-spec.ts`, BE-01) e no teste de contrato com o frontend (`test/contrato.e2e-spec.ts`, BE-15). O de contrato valida as respostas com a cópia dos schemas Zod do frontend em `test/contrato/`; rota nova ou mudança de resposta entra nele, e a cópia se atualiza como em [docs/api.md](docs/api.md#teste-de-contrato).
 - **Não escreva** testes de controller, de repositório ou de service com mocks.
 - Sem meta de cobertura.
 - Teste extra só quando a issue pedir na seção "Testes".
