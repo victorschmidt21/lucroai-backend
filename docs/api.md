@@ -90,7 +90,7 @@ Observações:
 | `ReceitaCusto` | `quantidade_lotes`, `total_unidades`, `custo_invisivel`, `custo_total_producao`, `custo_por_unidade` |
 | `SimulacaoCenario` | `custoUnitario`, `precoVenda`, `volume`, `lucroEstimado`, `margemProjetada` (fração), `breakEven` |
 | `PrecoVenda` | `custo_total_unitario`, `preco_sugerido`, `lucro_por_unidade` |
-| `Estoque` | `id`, `insumoId`, `quantidadeDisponivel` (pode ser negativa), `quantidadeMinima`, `dataAlteracao` (`null` sem alteração) |
+| `Estoque` | `id`, `insumoId`, `quantidadeDisponivel` (pode ser negativa), `quantidadeMinima`, `dataAlteracao` (`null` sem alteração; no monolito vem preenchida desde a criação, pelo `@updatedAt`). O `id` nunca é 0: todo insumo nasce com o registro de estoque (BE-07) |
 | `MovimentacaoEstoque` | `id`, `insumoId`, `tipo` (`ENTRADA \| SAIDA`), `origem` (`COMPRA \| PRODUCAO`), `quantidade`, `referenciaId` (`null`), `observacao` (`null`, **novo**), `dataMovimentacao` |
 | `EstoqueProduto` (**novo**) | `receitaId`, `quantidadeDisponivel`, `dataAlteracao` |
 | `Producao` | `id`, `receitaId`, `empresaId`, `quantidade` (lotes), `totalUnidades` (**novo**), `custoTotal` (`null`), `custoUnitario` (`null`), `dataProducao`, `rateios: [{ gastoIndiretoId (`null` se o gasto foi excluído), descricao (**novo**), valorRateado }]` |

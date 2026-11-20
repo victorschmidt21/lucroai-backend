@@ -190,12 +190,15 @@ entrada: saldo = round6(saldo + quantidade)
 saída:   saldo = round6(saldo − quantidade)          // pode ficar negativo
 ```
 
-- Toda mudança de saldo grava uma movimentação (`tipo`, `origem`, `quantidade`, `referenciaId`) **na mesma transação**.
-- Entrada manual: `quantidade ≥ 0.000001`, origem `COMPRA`. **Muda (BE-11, lacuna 22):** aceita `observacao` (opcional, até 200).
-- Baixa por produção: para cada item da receita, `quantidade = round6(item.quantidade × lotes)`, origem `PRODUCAO`, `referenciaId` = id da produção.
+- Funções puras em `estoque/domain/estoque.calculos.ts`: `calcularSaldoAposMovimentacao(saldo, tipo, quantidade)` e `calcularQuantidadeBaixa(quantidadePorLote, lotes)`.
+- Toda mudança de saldo grava uma movimentação (`tipo`, `origem`, `quantidade`, `referenciaId`) **na mesma transação**. A linha do estoque é travada (`SELECT ... FOR UPDATE`) antes de ler o saldo, para duas movimentações simultâneas não perderem uma atualização.
+- Insumo inexistente ou de outra empresa → 404 `INSUMO_NAO_ENCONTRADO` "Insumo não encontrado", conferido pelo `empresa_id` do próprio estoque. Como todo insumo nasce com o registro de estoque (BE-07), não existe mais a resposta com `id: 0` do operations-service para insumo sem registro.
+- `GET /estoque/insumos` (BE-11, lacuna 5) devolve um item por insumo da empresa, inclusive os sem movimentação, em ordem de `insumoId`.
+- Entrada manual: `quantidade ≥ 0.000001`, origem `COMPRA`; a movimentação grava a quantidade como veio (só o saldo leva `round6`). Responde 201. **Muda (BE-11, lacuna 22):** aceita `observacao` (opcional, até 200, aparada; vazia vira `null`).
+- Baixa por produção (`EstoqueService.baixarPorProducao`, dentro da `tx` da produção): para cada item da receita, `quantidade = round6(item.quantidade × lotes)`, origem `PRODUCAO`, `referenciaId` = id da produção.
 - **Saldo negativo é aceito** (lacuna 10, mantida na BE-11). Bloquear a produção sem saldo é decisão de produto e pede uma issue própria.
-- Estoque mínimo começa em 0. **Muda (BE-11, lacuna 14):** `PATCH /estoque/insumos/:id/minimo` define o mínimo (≥ 0).
-- Movimentações listadas da mais recente para a mais antiga.
+- Estoque mínimo começa em 0. **Muda (BE-11, lacuna 14):** `PATCH /estoque/insumos/:id/minimo` define o mínimo (≥ 0), sem movimentação; responde 200.
+- Movimentações listadas da mais recente para a mais antiga (o `id` desempata).
 
 ## Produções
 
