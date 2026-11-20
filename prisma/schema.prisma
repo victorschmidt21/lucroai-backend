@@ -1,4 +1,6 @@
-// Schema único do monolito. Os models entram a partir da BE-05.
+// Schema único do monolito (BE-05). Junta os bancos dos 5 microsserviços com
+// chaves estrangeiras reais. Tabelas e colunas mantêm os nomes de lá (snake_case).
+// O módulo dono de cada model está no mapa de módulos do docs/architecture.md.
 
 generator client {
   provider = "prisma-client"
@@ -7,4 +9,316 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+// ---------- enums ----------
+
+enum UnidadeMedida {
+  G
+  KG
+  ML
+  L
+  UN
+}
+
+enum MetodoRateio {
+  PROPORCIONAL
+  POR_UNIDADE
+  FIXO
+}
+
+enum StatusVenda {
+  PENDENTE
+  CONCLUIDA
+  CANCELADA
+}
+
+enum TipoMovimentacaoEstoque {
+  ENTRADA
+  SAIDA
+}
+
+/// Origem da movimentação de estoque de insumo.
+enum OrigemMovimentacaoEstoque {
+  COMPRA
+  PRODUCAO
+}
+
+/// Origem da movimentação de produto acabado: entrada por produção, saída por venda.
+enum OrigemMovimentacaoProdutoAcabado {
+  PRODUCAO
+  VENDA
+}
+
+// ---------- auth ----------
+
+model Empresa {
+  id          Int      @id @default(autoincrement())
+  nome        String   @db.VarChar(100)
+  cnpj        String?  @unique @db.VarChar(18)
+  segmento    String?  @db.VarChar(80)
+  dataCriacao DateTime @default(now()) @map("data_criacao")
+
+  usuarios                    Usuario[]
+  insumos                     Insumo[]
+  estoques                    Estoque[]
+  movimentacoesEstoque        MovimentacaoEstoque[]
+  gastosIndiretos             GastoIndireto[]
+  receitas                    Receita[]
+  estoquesProdutoAcabado      EstoqueProdutoAcabado[]
+  movimentacoesProdutoAcabado MovimentacaoProdutoAcabado[]
+  producoes                   Producao[]
+  vendas                      Venda[]
+
+  @@map("empresa")
+}
+
+model Usuario {
+  id          Int      @id @default(autoincrement())
+  empresaId   Int      @map("empresa_id")
+  nome        String?  @db.VarChar(80)
+  email       String   @unique @db.VarChar(80)
+  senha       String   @db.VarChar(255)
+  dataCriacao DateTime @default(now()) @map("data_criacao")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId])
+  @@map("usuario")
+}
+
+// ---------- insumos ----------
+
+model Insumo {
+  id                  Int           @id @default(autoincrement())
+  empresaId           Int           @map("empresa_id")
+  nome                String        @db.VarChar(80)
+  quantidadeBaseCusto Float         @map("quantidade_base_custo")
+  unidade             UnidadeMedida
+  valorPago           Float         @map("valor_pago")
+  /// valorPago / quantidadeBaseCusto, arredondado
+  custoUnitario       Float         @map("custo_unitario")
+  dataCriacao         DateTime      @default(now()) @map("data_criacao")
+
+  empresa       Empresa               @relation(fields: [empresaId], references: [id])
+  estoque       Estoque?
+  movimentacoes MovimentacaoEstoque[]
+  itensReceita  ItemReceita[]
+
+  @@index([empresaId])
+  @@map("insumo")
+}
+
+// ---------- gastos-indiretos ----------
+
+model GastoIndireto {
+  id           Int          @id @default(autoincrement())
+  empresaId    Int          @map("empresa_id")
+  descricao    String       @db.VarChar(100)
+  valor        Float
+  metodoRateio MetodoRateio @map("metodo_rateio")
+
+  empresa Empresa          @relation(fields: [empresaId], references: [id])
+  rateios RateioProducao[]
+
+  @@index([empresaId])
+  @@map("gasto_indireto")
+}
+
+// ---------- receitas ----------
+
+model Receita {
+  id                Int           @id @default(autoincrement())
+  empresaId         Int           @map("empresa_id")
+  nome              String        @db.VarChar(80)
+  /// Unidades produzidas por lote
+  rendimento        Int
+  unidadeRendimento UnidadeMedida @map("unidade_rendimento")
+  /// Soma dos itens + custo invisível de 1 lote
+  custoProducao     Float?        @map("custo_producao")
+  /// custoProducao / rendimento
+  custoUnitario     Float?        @map("custo_unitario")
+  /// Fração (0.30 = 30%)
+  margemLucro       Float?        @map("margem_lucro")
+  /// custoUnitario * (1 + margemLucro)
+  precoSugerido     Float?        @map("preco_sugerido")
+  dataCriacao       DateTime      @default(now()) @map("data_criacao")
+
+  empresa                     Empresa                      @relation(fields: [empresaId], references: [id])
+  itens                       ItemReceita[]
+  estoqueProdutoAcabado       EstoqueProdutoAcabado?
+  movimentacoesProdutoAcabado MovimentacaoProdutoAcabado[]
+  producoes                   Producao[]
+  itensVenda                  ItemVenda[]
+
+  @@index([empresaId])
+  @@map("receita")
+}
+
+model ItemReceita {
+  id             Int    @id @default(autoincrement())
+  receitaId      Int    @map("receita_id")
+  insumoId       Int    @map("insumo_id")
+  quantidade     Float
+  /// quantidade * insumo.custoUnitario
+  custoCalculado Float? @map("custo_calculado")
+
+  receita Receita @relation(fields: [receitaId], references: [id], onDelete: Cascade)
+  /// RESTRICT: insumo usado em receita não pode ser excluído (409 INSUMO_EM_USO, BE-07)
+  insumo  Insumo  @relation(fields: [insumoId], references: [id], onDelete: Restrict)
+
+  @@index([receitaId])
+  @@index([insumoId])
+  @@map("item_receita")
+}
+
+// ---------- estoque ----------
+
+/// Um saldo por insumo. Guarda o empresa_id para o módulo estoque conferir a empresa sem ler a tabela de insumos.
+model Estoque {
+  id                   Int       @id @default(autoincrement())
+  empresaId            Int       @map("empresa_id")
+  insumoId             Int       @unique @map("insumo_id")
+  quantidadeDisponivel Float     @default(0) @map("quantidade_disponivel")
+  quantidadeMinima     Float     @default(0) @map("quantidade_minima")
+  dataAlteracao        DateTime? @updatedAt @map("data_alteracao")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+  insumo  Insumo  @relation(fields: [insumoId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId])
+  @@map("estoque")
+}
+
+model MovimentacaoEstoque {
+  id               Int                       @id @default(autoincrement())
+  empresaId        Int                       @map("empresa_id")
+  insumoId         Int                       @map("insumo_id")
+  tipo             TipoMovimentacaoEstoque
+  origem           OrigemMovimentacaoEstoque
+  quantidade       Float
+  /// Id da produção (origem PRODUCAO); nulo na compra
+  referenciaId     Int?                      @map("referencia_id")
+  observacao       String?                   @db.VarChar(200)
+  dataMovimentacao DateTime                  @default(now()) @map("data_movimentacao")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+  insumo  Insumo  @relation(fields: [insumoId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId])
+  @@index([insumoId, dataMovimentacao])
+  @@map("movimentacao_estoque")
+}
+
+/// Um saldo de produto acabado por receita.
+model EstoqueProdutoAcabado {
+  id                   Int       @id @default(autoincrement())
+  empresaId            Int       @map("empresa_id")
+  receitaId            Int       @unique @map("receita_id")
+  quantidadeDisponivel Float     @default(0) @map("quantidade_disponivel")
+  dataAlteracao        DateTime? @updatedAt @map("data_alteracao")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+  receita Receita @relation(fields: [receitaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId])
+  @@map("estoque_produto_acabado")
+}
+
+model MovimentacaoProdutoAcabado {
+  id               Int                              @id @default(autoincrement())
+  empresaId        Int                              @map("empresa_id")
+  receitaId        Int                              @map("receita_id")
+  tipo             TipoMovimentacaoEstoque
+  origem           OrigemMovimentacaoProdutoAcabado
+  quantidade       Float
+  /// Id da produção (ENTRADA) ou da venda (SAIDA)
+  referenciaId     Int?                             @map("referencia_id")
+  dataMovimentacao DateTime                         @default(now()) @map("data_movimentacao")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+  receita Receita @relation(fields: [receitaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId])
+  @@index([receitaId, dataMovimentacao])
+  @@map("movimentacao_produto_acabado")
+}
+
+// ---------- producoes ----------
+
+model Producao {
+  id            Int      @id @default(autoincrement())
+  empresaId     Int      @map("empresa_id")
+  receitaId     Int      @map("receita_id")
+  /// Número de lotes produzidos
+  quantidade    Int
+  /// quantidade * receita.rendimento
+  totalUnidades Int      @map("total_unidades")
+  /// Insumos + rateio dos gastos indiretos
+  custoTotal    Float?   @map("custo_total")
+  /// custoTotal / totalUnidades
+  custoUnitario Float?   @map("custo_unitario")
+  dataProducao  DateTime @default(now()) @map("data_producao")
+
+  empresa Empresa          @relation(fields: [empresaId], references: [id])
+  /// RESTRICT: receita com produção não pode ser excluída
+  receita Receita          @relation(fields: [receitaId], references: [id], onDelete: Restrict)
+  rateios RateioProducao[]
+
+  @@index([empresaId, receitaId])
+  @@map("producao")
+}
+
+model RateioProducao {
+  id              Int    @id @default(autoincrement())
+  producaoId      Int    @map("producao_id")
+  /// Nulo quando o gasto foi excluído depois da produção
+  gastoIndiretoId Int?   @map("gasto_indireto_id")
+  /// Cópia da descrição do gasto na hora da produção
+  descricao       String @db.VarChar(100)
+  valorRateado    Float  @map("valor_rateado")
+
+  producao      Producao       @relation(fields: [producaoId], references: [id], onDelete: Cascade)
+  gastoIndireto GastoIndireto? @relation(fields: [gastoIndiretoId], references: [id], onDelete: SetNull)
+
+  @@index([producaoId])
+  @@index([gastoIndiretoId])
+  @@map("rateio_producao")
+}
+
+// ---------- vendas ----------
+
+model Venda {
+  id        Int         @id @default(autoincrement())
+  empresaId Int         @map("empresa_id")
+  total     Float?
+  status    StatusVenda @default(PENDENTE)
+  dataVenda DateTime    @default(now()) @map("data_venda")
+
+  empresa Empresa     @relation(fields: [empresaId], references: [id])
+  itens   ItemVenda[]
+
+  @@index([empresaId, dataVenda])
+  @@map("venda")
+}
+
+model ItemVenda {
+  id                Int    @id @default(autoincrement())
+  vendaId           Int    @map("venda_id")
+  receitaId         Int    @map("receita_id")
+  quantidade        Int
+  /// Preço efetivamente cobrado (pode diferir do precoSugerido)
+  precoUnitarioReal Float  @map("preco_unitario_real")
+  /// Cópia do custo unitário da receita na hora da venda
+  custoUnitario     Float? @map("custo_unitario")
+  /// (precoUnitarioReal - custoUnitario) / precoUnitarioReal, com round4
+  margemRealizada   Float? @map("margem_realizada")
+
+  venda   Venda   @relation(fields: [vendaId], references: [id], onDelete: Cascade)
+  /// RESTRICT: receita vendida não pode ser excluída
+  receita Receita @relation(fields: [receitaId], references: [id], onDelete: Restrict)
+
+  @@index([vendaId])
+  @@index([receitaId])
+  @@map("item_venda")
 }
