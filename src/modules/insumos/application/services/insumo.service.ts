@@ -82,6 +82,26 @@ export class InsumoService {
     await this.repository.delete(id);
   }
 
+  /**
+   * Para outros módulos (receitas): os insumos dos ids informados, ignorando
+   * repetidos. 404 se algum não existir ou for de outra empresa.
+   */
+  async buscarVariosDaEmpresa(
+    ids: number[],
+    empresaId: number,
+  ): Promise<InsumoDto[]> {
+    const unicos = [...new Set(ids)];
+    if (unicos.length === 0) return [];
+    const [rows, saldos] = await Promise.all([
+      this.repository.listByIdsAndEmpresa(unicos, empresaId),
+      this.estoqueService.saldosPorInsumo(empresaId, unicos),
+    ]);
+    if (rows.length !== unicos.length) {
+      throw new NotFoundError('INSUMO_NAO_ENCONTRADO', 'Insumo não encontrado');
+    }
+    return rows.map((row) => toInsumoDto(row, saldos.get(row.id)));
+  }
+
   private async comSaldo(row: Insumo): Promise<InsumoDto> {
     const saldos = await this.estoqueService.saldosPorInsumo(row.empresaId, [
       row.id,

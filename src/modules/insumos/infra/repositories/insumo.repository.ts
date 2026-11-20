@@ -31,6 +31,12 @@ export class InsumoRepository {
     return this.prisma.insumo.findFirst({ where: { id, empresaId } });
   }
 
+  listByIdsAndEmpresa(ids: number[], empresaId: number): Promise<Insumo[]> {
+    return this.prisma.insumo.findMany({
+      where: { id: { in: ids }, empresaId },
+    });
+  }
+
   create(
     empresaId: number,
     data: InsumoData,
