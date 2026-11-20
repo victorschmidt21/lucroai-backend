@@ -38,7 +38,7 @@ Cada tabela pertence a **um** módulo, e só ele lê e escreve nela pelo Prisma.
 
 | Módulo | Tabelas (models) | Responsabilidade | Depende de | Issues |
 | --- | --- | --- | --- | --- |
-| `auth` | `Empresa`, `Usuario` | cadastro de empresa, login e JWT | — | BE-06 |
+| `auth` | `Empresa`, `Usuario` | cadastro de empresa, login e JWT (assinado com o `JwtService` do `JwtAuthModule`); não exporta service | — | BE-06 |
 | `estoque` | `Estoque`, `MovimentacaoEstoque`, `EstoqueProdutoAcabado`, `MovimentacaoProdutoAcabado` | saldo e histórico de insumos e de produto acabado | — | BE-07, BE-11, BE-12 |
 | `insumos` | `Insumo` | cadastro de insumos e custo unitário | `estoque` | BE-07 |
 | `gastos-indiretos` | `GastoIndireto` | cadastro de gastos e cálculo do rateio | — | BE-08 |
@@ -86,7 +86,8 @@ src/modules/<modulo>/
 │   └── services/<entidade>.service.ts
 └── infra/
     ├── controllers/<recurso>.controller.ts
-    └── repositories/<entidade>.repository.ts
+    ├── repositories/<entidade>.repository.ts
+    └── guards/<nome>.guard.ts       # só quando o módulo precisa de guard próprio (ex.: auth/AuthThrottlerGuard)
 ```
 
 Só o módulo `vendas` tem também `domain/venda.entity.ts` (e o `venda.entity.spec.ts`). Módulo com várias tabelas (ex.: `estoque`) tem um repositório e, se fizer sentido, um service por tabela principal, nas mesmas pastas. Não crie submódulos, interfaces de repositório, tokens `Symbol` nem `OVERVIEW.md`.

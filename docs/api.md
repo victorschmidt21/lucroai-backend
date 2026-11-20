@@ -69,7 +69,8 @@ Fórmulas e regras de cada rota estão em [business-rules.md](business-rules.md)
 Observações:
 
 - Os corpos misturam convenções: insumos, custo e simulação usam `camelCase` (`quantidadeBaseCusto`, `quantidadeLotes`, `novoPreco`); gastos, receitas, produções e vendas usam `snake_case` (`metodo_rateio`, `margem_lucro`, `receita_id`, `preco_unitario_real`). As respostas são `camelCase`, menos `ReceitaCusto` e `PrecoVenda`. **Mantenha os nomes como estão**: no DTO, o nome da propriedade é o nome do campo do JSON.
-- `POST /auth/empresa`: o `CreateEmpresaDto` atual exige `cnpj` e `nome_usuario`; a BE-06 os torna opcionais, o que é compatível (o banco já aceita `null`).
+- `POST /auth/empresa`: o `CreateEmpresaDto` atual exige `cnpj` e `nome_usuario`; a BE-06 os torna opcionais, o que é compatível (o banco já aceita `null`, e o payload os devolve como `null`). Textos são aparados (vazio = sem valor), com os limites das colunas: `nome_empresa` até 100, `cnpj` até 18, `segmento`, `nome_usuario` e `email` até 80; `senha` com no mínimo 6.
+- `POST /auth/login` e `POST /auth/empresa`: `email` é aparado e passado para minúsculas antes da validação (`@IsEmail`).
 - `GET /producoes?receitaId=`: `receitaId` inteiro opcional; inválido → 400.
 - `GET /vendas`: `status` do enum `StatusVenda`; `dataInicio` e `dataFim` em ISO 8601 com data e hora (a web envia o início e o fim do dia local), comparados como instantes (`dataVenda ≥ dataInicio` e `≤ dataFim`). Qualquer filtro inválido → 400.
 
@@ -124,7 +125,7 @@ Formato único, gerado pelo `AllExceptionsFilter` (`src/shared/infra/http/`), o 
 | 404 | exceção do Nest | rota inexistente | `RECURSO_NAO_ENCONTRADO` |
 | 409 | `ConflictError` | duplicidade ou registro em uso | `CNPJ_JA_CADASTRADO`, `EMAIL_JA_CADASTRADO`, `INSUMO_EM_USO`, `RECEITA_EM_USO` |
 | 422 | `BusinessRuleError` | entrada válida que viola uma regra | `ESTOQUE_INSUFICIENTE`, `VENDA_FINALIZADA` |
-| 429 | `@nestjs/throttler` | limite de tentativas do login | `MUITAS_REQUISICOES` |
+| 429 | `@nestjs/throttler` | limite de tentativas do `AuthController` (login e cadastro): 10 por minuto por IP e e-mail | `MUITAS_REQUISICOES` |
 | 503 | `GET /health` | banco fora do ar | `SERVICO_INDISPONIVEL` |
 | 500 | qualquer outro erro | falha inesperada | `ERRO_INTERNO` |
 
