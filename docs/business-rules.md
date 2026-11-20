@@ -110,7 +110,7 @@ precoSugerido    = round2(custoUnitario × (1 + margem))                 // só 
 - **Custo invisível (lacuna 18, mantida na BE-09):** soma o rateio de **todos** os gastos indiretos da empresa, não só dos escolhidos. Com o Aluguel de R$ 1.800 `FIXO`, o custo de produção de toda receita sobe R$ 1.800. Mudar a regra pede uma issue própria, porque muda os números que o frontend mostra.
 - O resultado do custo invisível precisa ser finito e ≥ 0, senão 400 (`obterCustoInvisivel`). Com valores ≥ 0 validados no cadastro, isso não acontece, e o monolito não repete a conferência.
 - Rendimento ≤ 0 → 400 `RENDIMENTO_INVALIDO` "Rendimento da receita deve ser maior que zero" (`validarRendimento`). O DTO já exige inteiro positivo.
-- Funções puras em `receitas/domain/receitas.calculos.ts` (BE-09): `calcularCustoItem`, `calcularCustoInvisivel` (usa `calcularValorRateado` de `gastos-indiretos`), `calcularPrecoSugerido`, `calcularCustoReceita` (1 lote), `resolverMargem` e `precisaRecalcular`. O service busca os insumos por `InsumoService.buscarVariosDaEmpresa` e os gastos por `GastoIndiretoService.listarPorEmpresa`, sem HTTP.
+- Funções puras em `receitas/domain/receitas.calculos.ts`: `calcularCustoItem`, `calcularCustoInvisivel(gastos, rendimento, lotes = 1)` (usa `calcularValorRateado` de `gastos-indiretos`), `calcularPrecoSugerido`, `calcularCustoReceita` (`lotes` opcional, 1 por padrão; devolve também `lotes` e `totalUnidades`), `resolverMargem` e `precisaRecalcular` (BE-09); `simularCenario` e `calcularPrecoVenda` (BE-10). O service busca os insumos por `InsumoService.buscarVariosDaEmpresa` e os gastos por `GastoIndiretoService.listarPorEmpresa`, sem HTTP.
 - Margem é **fração** (`0.6` = 60%), `≥ 0`.
 - O item guarda `custoCalculado` para 1 lote. A receita guarda `custoProducao`, `custoUnitario`, `margemLucro` e `precoSugerido`; sem valor, esses campos são **omitidos** na resposta.
 - Validação do corpo (`create-receita.dto.ts`): nome até 80, `rendimento` inteiro > 0, `quantidade` do item ≥ 0.001, `insumo_id` inteiro > 0. **Muda (BE-09):** a lista de insumos não pode ser vazia (400), os insumos precisam ser da empresa (404 `INSUMO_NAO_ENCONTRADO`), e o nome passa a ser aparado e obrigatório (como o do insumo e o do gasto).
@@ -142,6 +142,10 @@ Origem: `custo.service.ts` (`calcularPorReceita`, `simularPorReceita`) e `custos
 | `custo_total_producao` | `custoProducao` |
 | `custo_por_unidade` | `custoUnitario` |
 
+- A quantidade do item é multiplicada pelos lotes **antes** do `round2` do item, como hoje: o fermento do Pão Francês dá 0,26 em 1 lote e 0,77 (não 0,78) em 3.
+- `quantidadeLotes` inteiro > 0 (400 senão). `GET` responde 200 e o `POST` 201. Receita de outra empresa → 404. Não grava nada.
+- Service: `ReceitaService.calcularCusto(id, lotes, empresaId)`; resposta montada por `toReceitaCustoDto`.
+
 ### Simulação de cenário e break-even
 
 Origem: `recipe-service/src/modules/custos/application/services/simulacao.service.ts` e `simular-cenario.dto.ts`.
@@ -157,23 +161,25 @@ breakEven       = Math.ceil((custo × volume) / preco)     // unidades, sem arre
 resposta     = { custoUnitario: round2(custo), precoVenda: round2(preco), volume, lucroEstimado, margemProjetada, breakEven }
 ```
 
-- Mensagens atuais (400): "Receita sem custo calculado. Informe novoCusto para simular." e "Receita sem preço sugerido definido. Informe novoPreco para simular.".
+- Mensagens atuais (400): "Receita sem custo calculado. Informe novoCusto para simular." (`RECEITA_SEM_CUSTO`) e "Receita sem preço sugerido definido. Informe novoPreco para simular." (`RECEITA_SEM_PRECO`).
 - `novoCusto` e `novoPreco` > 0 e `volume` inteiro > 0, quando informados.
-- **Muda (BE-10, lacuna 27):** preço igual a 0 (só acontece com o `precoSugerido` salvo igual a 0) → 400 `PRECO_INVALIDO`, em vez de devolver `NaN`.
+- **Muda (BE-10, lacuna 27):** preço igual a 0 (só acontece com o `precoSugerido` salvo igual a 0) → 400 `PRECO_INVALIDO` "Preço de venda deve ser maior que zero. Informe novoPreco para simular.", em vez de devolver `NaN`.
+- Função pura `simularCenario(entrada, receita)`; não grava nada. Responde 201.
 
 ### Preço de venda
 
 Origem: `receita.service.ts` (`calcularPrecoVenda`) e `receitas/application/dto/preco-venda.dto.ts`.
 
 ```
-custo                = receita.custoUnitario      // salvo; ausente → 400 "Receita sem custo calculado"
+custo                = receita.custoUnitario      // salvo; ausente → 400 RECEITA_SEM_CUSTO "Receita sem custo calculado"
 preco_sugerido       = round2(custo × (1 + margem_lucro))
 lucro_por_unidade    = round2(preco_sugerido − custo)
 custo_total_unitario = custo
 ```
 
 - `margem_lucro ≥ 0`. Não grava nada na receita.
-- **Muda (BE-10, lacuna 20):** hoje não há arredondamento (`72.11200000000001`); o monolito aplica `round2` em `preco_sugerido` e `lucro_por_unidade`.
+- **Muda (BE-10, lacuna 20):** hoje não há arredondamento (`72.11200000000001`); o monolito aplica `round2` em `preco_sugerido` e `lucro_por_unidade` (este calculado com o preço já arredondado; com o seed, o resultado é igual ao `round2` do valor de hoje).
+- Função pura `calcularPrecoVenda(custoUnitario, margem)`. Responde 201.
 
 ## Estoque de insumos
 

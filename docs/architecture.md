@@ -42,7 +42,7 @@ Cada tabela pertence a **um** módulo, e só ele lê e escreve nela pelo Prisma.
 | `estoque` | `Estoque`, `MovimentacaoEstoque`, `EstoqueProdutoAcabado`, `MovimentacaoProdutoAcabado` | saldo e histórico de insumos e de produto acabado; exporta `EstoqueService` (`criarRegistroInicial` e `saldosPorInsumo` desde a BE-07) | — | BE-07, BE-11, BE-12 |
 | `insumos` | `Insumo` | cadastro de insumos e custo unitário; cria o estoque inicial na mesma transação; exporta `InsumoService` (`buscarVariosDaEmpresa` desde a BE-09) | `estoque` | BE-07 |
 | `gastos-indiretos` | `GastoIndireto` | cadastro de gastos e cálculo do rateio (`calcularValorRateado`); exporta `GastoIndiretoService` (`listarPorEmpresa` e `buscarVariosDaEmpresa`) | — | BE-08 |
-| `receitas` | `Receita`, `ItemReceita` | receitas, custo (`calcularCustoReceita`), custo para N lotes, simulação e preço de venda; exporta `ReceitaService` (`buscarDaEmpresa`) | `insumos`, `gastos-indiretos` | BE-09, BE-10 |
+| `receitas` | `Receita`, `ItemReceita` | receitas, custo para 1 ou N lotes (`calcularCustoReceita`), simulação (`simularCenario`) e preço de venda (`calcularPrecoVenda`), sem gravar; exporta `ReceitaService` (`buscarDaEmpresa`) | `insumos`, `gastos-indiretos` | BE-09, BE-10 |
 | `producoes` | `Producao`, `RateioProducao` | produção com rateio, baixa de insumos e entrada de produto acabado | `receitas`, `gastos-indiretos`, `estoque` | BE-12 |
 | `vendas` | `Venda`, `ItemVenda` | vendas e conclusão com baixa de produto acabado | `receitas`, `estoque` | BE-13 |
 
