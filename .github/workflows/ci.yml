@@ -1,0 +1,88 @@
+name: CI
+
+# Sem filtro de branch no pull_request: os PRs empilhados (base diferente da
+# main) também precisam rodar o CI.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Um novo push no mesmo PR/branch cancela a execução anterior
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verificacao:
+    name: Lint, build e testes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      # O postinstall roda `prisma generate`
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Formatação
+        run: npm run format:check
+
+      - name: Build
+        run: npm run build
+
+      - name: Testes unitários
+        run: npm test
+
+  e2e:
+    name: Testes e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: lucroai
+          POSTGRES_PASSWORD: lucroai
+          POSTGRES_DB: lucroai_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lucroai -d lucroai_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    # Valores fictícios, exclusivos do CI (nada de secrets do GitHub).
+    # O vitest.config.e2e.ts lê o banco de E2E_DATABASE_URL.
+    env:
+      NODE_ENV: test
+      JWT_SECRET: segredo-ficticio-exclusivo-do-ci-com-32-caracteres
+      DATABASE_URL: postgresql://lucroai:lucroai@localhost:5432/lucroai_test?schema=public
+      E2E_DATABASE_URL: postgresql://lucroai:lucroai@localhost:5432/lucroai_test?schema=public
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      # O postinstall roda `prisma generate`
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Aplicar migrations
+        run: npm run db:deploy
+
+      - name: Testes e2e
+        run: npm run test:e2e
