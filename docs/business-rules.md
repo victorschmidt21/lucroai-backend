@@ -1,0 +1,260 @@
+# Regras de negócio
+
+Fórmulas, arredondamentos e regras do LucroAI. Foram conferidos no código dos microsserviços ([`GrupoDoisENG/lucroai-backend`](https://github.com/GrupoDoisENG/lucroai-backend)), e cada seção cita o arquivo de origem. Os caminhos começam em `services/` daquele repositório. Quando o `OVERVIEW.md` de lá diverge do código, vale o código.
+
+**Os números do monolito precisam ser iguais aos dos microsserviços**, exceto onde esta página diz "muda" e cita a issue que corrige uma lacuna. O frontend mostra esses números e repete alguns cálculos nas prévias.
+
+Cada fórmula vira uma função pura em `src/modules/<modulo>/domain/<modulo>.calculos.ts`, com teste unitário (ver [AGENTS.md](../AGENTS.md#testes)).
+
+## Arredondamento
+
+Os microsserviços arredondam com `Number(valor.toFixed(n))`. O monolito usa **a mesma implementação**, para os centavos baterem nos mesmos casos de borda do ponto flutuante (por exemplo, `(1.005).toFixed(2)` dá `'1.00'`). Não troque por `Math.round(valor * 100) / 100`.
+
+| Função | Implementação | Uso |
+| --- | --- | --- |
+| `round2(v)` | `Number(v.toFixed(2))` | dinheiro, margem projetada da simulação |
+| `round4(v)` | `Number(v.toFixed(4))` | margem realizada da venda |
+| `round6(v)` | `Number(v.toFixed(6))` | quantidades de estoque e saldos |
+
+As três ficam em `src/shared/domain/arredondamento.ts`, criado pela primeira issue que precisar delas (BE-07 ou BE-08).
+
+Valores e quantidades são `Float` no banco (`double precision`) e `number` na API, como hoje (BE-05). Todo valor calculado é arredondado **antes** de gravar.
+
+## Enumerações
+
+| Enum | Valores |
+| --- | --- |
+| `UnidadeMedida` | `G`, `KG`, `ML`, `L`, `UN` |
+| `MetodoRateio` | `FIXO`, `PROPORCIONAL`, `POR_UNIDADE` |
+| `StatusVenda` | `PENDENTE`, `CONCLUIDA`, `CANCELADA` |
+| `TipoMovimentacaoEstoque` | `ENTRADA`, `SAIDA` |
+| `OrigemMovimentacaoEstoque` | `COMPRA`, `PRODUCAO` |
+
+## Multiempresa
+
+- Todo registro de negócio tem `empresa_id`. A empresa vem **sempre** do token (`@CurrentUser().empresa.id`), nunca da URL, da query ou do corpo.
+- Recurso de outra empresa responde **404**, igual a um inexistente. Isso vale também para ids informados no corpo (insumos da receita, receita e gastos da produção, receita do item de venda).
+
+## Auth
+
+Origem: `auth-service/src/modules/auth/application/services/auth.service.ts` e `auth.module.ts`.
+
+- Cadastro (`POST /auth/empresa`) cria empresa e usuário na mesma transação. CNPJ já cadastrado → 409 "CNPJ já cadastrado"; e-mail já cadastrado → 409 "E-mail já cadastrado".
+- Senha com `argon2` (hash no cadastro, `verify` no login). E-mail inexistente e senha errada dão a **mesma** resposta: 401 "Credenciais inválidas".
+- JWT HS256, validade de **4 h**, payload `{ sub, email, nome, empresa: { id, nome, cnpj, segmento } }`. O frontend lê esse payload: não mude os nomes.
+- **Muda (BE-06):** o e-mail é normalizado (trim e minúsculas) no cadastro e no login.
+
+## Insumos
+
+Origem: `catalog-service/src/modules/insumos/domain/models/insumo.entity.ts` e `application/dto/create-insumo.dto.ts`.
+
+```
+custoUnitario = quantidadeBaseCusto > 0 ? valorPago / quantidadeBaseCusto : 0
+```
+
+- **Sem arredondamento** (`calcularCustoUnitario`). O custo unitário guarda a divisão inteira, e quem o usa arredonda depois (o item da receita, por exemplo).
+- Recalculado sempre que `valorPago` ou `quantidadeBaseCusto` mudam.
+- `precoUnitario` na resposta é um alias de `custoUnitario` (`insumo.dto.ts`), mantido por compatibilidade.
+- Validação: `quantidadeBaseCusto ≥ 0.000001`, `valorPago ≥ 0` e `quantidadeDisponivelInicial ≥ 0` (opcional).
+- **Muda (BE-07):** nome obrigatório, aparado e com até 80 caracteres (lacuna 12); excluir insumo usado em receita → 409 `INSUMO_EM_USO` (lacuna 13); resposta ganha `quantidadeMinima` (lacuna 5).
+- Criar com `quantidadeDisponivelInicial > 0` cria o estoque e uma movimentação `ENTRADA/COMPRA` na mesma transação (BE-07). Hoje isso acontece por evento (`insumo-criado.consumer.ts`).
+
+## Gastos indiretos e rateio
+
+Origem do cadastro: `catalog-service/src/modules/gastos-indiretos/` (`create-gasto-indireto.dto.ts`). Origem do rateio: `operations-service/src/modules/producoes/application/services/producao.service.ts` (`calcularValorRateado`) e `recipe-service/src/modules/custos/infra/providers/default-custo-invisivel-result.provider.ts`, que têm a mesma fórmula.
+
+- Descrição até 100 caracteres, `valor ≥ 0`, `metodo_rateio` obrigatório. **Muda (BE-08):** a descrição passa a ser obrigatória e aparada.
+
+Rateio de um gasto para `lotes` lotes de uma receita com `totalUnidades = lotes × rendimento`:
+
+| Método | Valor rateado |
+| --- | --- |
+| `FIXO` | `round2(valor)` |
+| `PROPORCIONAL` | `round2(valor × lotes)` |
+| `POR_UNIDADE` | `round2(valor × totalUnidades)` |
+
+Método desconhecido cai no `FIXO` (o `default` do `switch`). Com o enum validado no DTO e no banco, isso não acontece no monolito.
+
+A função `calcularValorRateado` fica em `gastos-indiretos/domain/gastos-indiretos.calculos.ts` (BE-08) e é usada pelas receitas (custo invisível) e pelas produções.
+
+## Receitas: custo
+
+Origem: `recipe-service/src/modules/custos/application/services/custo.service.ts` (`calcularReceita`, `calcularItens`, `calcularCustoTotalProducao`, `calcularCustoPorUnidade`, `calcularPrecoSugerido`) e `default-custo-invisivel-result.provider.ts`.
+
+Para `lotes` lotes (o cadastro e a edição usam `lotes = 1`):
+
+```
+quantidadeItem   = item.quantidade × lotes
+custoCalculado   = round2(quantidadeItem × insumo.custoUnitario)        // por item
+custoBase        = round2(Σ custoCalculado)
+totalUnidades    = rendimento × lotes
+custoInvisivel   = round2(Σ calcularValorRateado(gasto, lotes, totalUnidades))   // TODOS os gastos da empresa
+custoProducao    = round2(custoBase + custoInvisivel)
+custoUnitario    = round2(custoProducao / totalUnidades)                // rendimento ≤ 0 → 400
+precoSugerido    = round2(custoUnitario × (1 + margem))                 // só se margem != null
+```
+
+- **Custo invisível (lacuna 18, mantida na BE-09):** soma o rateio de **todos** os gastos indiretos da empresa, não só dos escolhidos. Com o Aluguel de R$ 1.800 `FIXO`, o custo de produção de toda receita sobe R$ 1.800. Mudar a regra pede uma issue própria, porque muda os números que o frontend mostra.
+- O resultado do custo invisível precisa ser finito e ≥ 0, senão 400 (`obterCustoInvisivel`). Com valores ≥ 0 validados no cadastro, isso não acontece.
+- Rendimento ≤ 0 → 400 "Rendimento da receita deve ser maior que zero" (`validarRendimento`). O DTO já exige inteiro positivo.
+- Margem é **fração** (`0.6` = 60%), `≥ 0`.
+- O item guarda `custoCalculado` para 1 lote. A receita guarda `custoProducao`, `custoUnitario`, `margemLucro` e `precoSugerido`; sem valor, esses campos são **omitidos** na resposta.
+- Validação do corpo (`create-receita.dto.ts`): nome até 80, `rendimento` inteiro > 0, `quantidade` do item ≥ 0.001, `insumo_id` inteiro > 0. **Muda (BE-09):** a lista de insumos não pode ser vazia, e os insumos precisam ser da empresa (404).
+
+### Edição
+
+Origem: `recipe-service/src/modules/receitas/application/services/receita.service.ts` (`update`).
+
+- Campo omitido mantém o valor salvo.
+- O custo só é recalculado se vierem `insumos`, `rendimento` ou `margem_lucro`. Mudar só `nome` ou `unidadeRendimento` mantém os custos salvos.
+- **Muda (BE-09, lacuna 21):** `margem_lucro: null` remove a margem **e** o preço sugerido.
+- Mudar o custo de um insumo **não** recalcula as receitas que o usam: o custo é recalculado quando a receita é salva de novo (comportamento atual, mantido).
+- **Muda (BE-09):** excluir receita usada em produção ou venda → 409 `RECEITA_EM_USO`.
+
+### Custo para N lotes
+
+Origem: `custo.service.ts` (`calcularPorReceita`, `simularPorReceita`) e `custos/application/dto/receita-custo.dto.ts`.
+
+`GET /receitas/:id/custo` (1 lote) e `POST /receitas/:id/custo/simular` (`quantidadeLotes`, inteiro > 0) **recalculam** com os custos atuais dos insumos e os gastos atuais da empresa, pela fórmula acima. Não usam os valores salvos. A resposta é `snake_case` (lacuna 15, mantida):
+
+| Campo | Valor |
+| --- | --- |
+| `quantidade_lotes` | `lotes` |
+| `total_unidades` | `rendimento × lotes` |
+| `custo_invisivel` | `custoInvisivel` |
+| `custo_total_producao` | `custoProducao` |
+| `custo_por_unidade` | `custoUnitario` |
+
+### Simulação de cenário e break-even
+
+Origem: `recipe-service/src/modules/custos/application/services/simulacao.service.ts` e `simular-cenario.dto.ts`.
+
+```
+custo        = novoCusto ?? receita.custoUnitario        // salvo; ausente → 400
+preco        = novoPreco ?? receita.precoSugerido        // salvo; ausente → 400
+volume       = volume ?? receita.rendimento
+margemUnit   = preco − custo
+lucroEstimado   = round2(margemUnit × volume)
+margemProjetada = round2(margemUnit / preco)             // fração, com 2 casas
+breakEven       = Math.ceil((custo × volume) / preco)     // unidades, sem arredondar a entrada
+resposta     = { custoUnitario: round2(custo), precoVenda: round2(preco), volume, lucroEstimado, margemProjetada, breakEven }
+```
+
+- Mensagens atuais (400): "Receita sem custo calculado. Informe novoCusto para simular." e "Receita sem preço sugerido definido. Informe novoPreco para simular.".
+- `novoCusto` e `novoPreco` > 0 e `volume` inteiro > 0, quando informados.
+- **Muda (BE-10, lacuna 27):** preço igual a 0 (só acontece com o `precoSugerido` salvo igual a 0) → 400 `PRECO_INVALIDO`, em vez de devolver `NaN`.
+
+### Preço de venda
+
+Origem: `receita.service.ts` (`calcularPrecoVenda`) e `receitas/application/dto/preco-venda.dto.ts`.
+
+```
+custo                = receita.custoUnitario      // salvo; ausente → 400 "Receita sem custo calculado"
+preco_sugerido       = round2(custo × (1 + margem_lucro))
+lucro_por_unidade    = round2(preco_sugerido − custo)
+custo_total_unitario = custo
+```
+
+- `margem_lucro ≥ 0`. Não grava nada na receita.
+- **Muda (BE-10, lacuna 20):** hoje não há arredondamento (`72.11200000000001`); o monolito aplica `round2` em `preco_sugerido` e `lucro_por_unidade`.
+
+## Estoque de insumos
+
+Origem: `operations-service/src/modules/estoque/` (`estoque.entity.ts`, `prisma-estoque.repository.ts` em `aplicarMovimentacao`, `estoque.service.ts`).
+
+```
+entrada: saldo = round6(saldo + quantidade)
+saída:   saldo = round6(saldo − quantidade)          // pode ficar negativo
+```
+
+- Toda mudança de saldo grava uma movimentação (`tipo`, `origem`, `quantidade`, `referenciaId`) **na mesma transação**.
+- Entrada manual: `quantidade ≥ 0.000001`, origem `COMPRA`. **Muda (BE-11, lacuna 22):** aceita `observacao` (opcional, até 200).
+- Baixa por produção: para cada item da receita, `quantidade = round6(item.quantidade × lotes)`, origem `PRODUCAO`, `referenciaId` = id da produção.
+- **Saldo negativo é aceito** (lacuna 10, mantida na BE-11). Bloquear a produção sem saldo é decisão de produto e pede uma issue própria.
+- Estoque mínimo começa em 0. **Muda (BE-11, lacuna 14):** `PATCH /estoque/insumos/:id/minimo` define o mínimo (≥ 0).
+- Movimentações listadas da mais recente para a mais antiga.
+
+## Produções
+
+Origem: `operations-service/src/modules/producoes/application/services/producao.service.ts` (`create`).
+
+```
+gastos          = gasto_indireto_ids omitido → todos os gastos da empresa
+                  gasto_indireto_ids = []    → nenhum gasto
+totalUnidades   = quantidade × receita.rendimento
+custoBase       = receita.custoProducao × quantidade        // custo SALVO da receita (0 se ausente), sem arredondar
+rateios         = gastos.map(g => calcularValorRateado(g, quantidade, totalUnidades))
+custoTotal      = round2(custoBase + Σ rateios)
+custoUnitario   = totalUnidades > 0 ? round2(custoTotal / totalUnidades) : 0
+```
+
+- `quantidade` é o número de **lotes** (inteiro > 0).
+- O `custoProducao` salvo da receita já contém o custo invisível de 1 lote com todos os gastos (lacuna 18). Por isso os gastos rateados na produção entram **de novo** no `custoTotal`. É o comportamento atual e fica mantido junto com a lacuna 18.
+- Efeitos, **numa transação só** no monolito (BE-12): grava a produção e os rateios, dá baixa nos insumos (seção anterior) e dá entrada de `totalUnidades` no estoque de produto acabado da receita. Hoje são chamadas HTTP e eventos sem compensação.
+- **Muda (BE-12):** a receita e os gastos precisam ser da empresa do token (lacuna 11); a produção grava `totalUnidades` (lacuna 23) e a descrição do gasto em cada rateio.
+
+## Estoque de produto acabado
+
+Origem: `operations-service/src/modules/estoque-produto-acabado/` (`estoque-produto-acabado.service.ts` e `prisma-estoque-produto-acabado.repository.ts`).
+
+```
+entrada por produção: saldo = round6(saldo + totalUnidades)
+saída por venda:      se saldo < quantidade → erro "Estoque insuficiente..."
+                      senão saldo = round6(saldo − quantidade)
+```
+
+- Um saldo por receita, com movimentações (`ENTRADA` na produção, `SAIDA` na venda).
+- **Muda (BE-12):** a falta de saldo responde 422 `ESTOQUE_INSUFICIENTE` (hoje é 400 dentro do consumidor do evento), e a mensagem continua começando com "Estoque insuficiente", que o frontend detecta. Nova rota `GET /estoque/produtos` (lacuna 6).
+
+## Vendas
+
+Origem: `sales-service/src/modules/vendas/application/services/venda.service.ts` (`create`, `atualizarStatus`) e `create-venda.dto.ts`.
+
+```
+custoUnitario    = receita.custoUnitario                        // snapshot do valor SALVO na hora da venda
+margemRealizada  = custoUnitario != null ? round4((preco − custoUnitario) / preco) : null
+total            = round2(Σ quantidade × preco)
+status inicial   = PENDENTE
+```
+
+- Item: `receita_id` inteiro > 0, `quantidade` inteiro > 0, `preco_unitario_real` > 0 com até 2 casas.
+- Transições: só `PENDENTE` muda, para `CONCLUIDA` ou `CANCELADA`. Qualquer outro caso → "Venda já finalizada não pode ser alterada". **Muda (BE-13):** o status passa de 400 para 422.
+- O registro não confere o estoque (lacuna 24, mantida): a barreira é a conclusão.
+- **Muda (BE-13):** concluir dá baixa de cada item no produto acabado **na mesma transação** da mudança de status. Sem saldo → 422 "Estoque insuficiente..." e a venda continua `PENDENTE` (lacuna 9). Hoje a baixa é assíncrona e a venda fica `CONCLUIDA` mesmo sem saldo.
+- **Muda (BE-13):** `itens` não pode ser vazio (lacuna 25); a receita precisa ser da empresa (lacuna 26); filtros inválidos dão 400 (lacuna 8).
+- Listagem: filtros `status`, `dataInicio` (`dataVenda ≥`) e `dataFim` (`dataVenda ≤`), da mais recente para a mais antiga (`prisma-venda.repository.ts`, `findAll`).
+- `Venda` é a única entidade de classe do projeto (BE-13): total, margem e transições de status ficam nela.
+
+## Lacunas do backend atual
+
+A lista numerada está em [`lucroai-frontend/docs/api-integration.md#lacunas-do-backend`](https://github.com/victorschmidt21/lucroai-frontend/blob/main/docs/api-integration.md#lacunas-do-backend). Destino de cada uma no monolito:
+
+| # | Lacuna | Destino | Issue | Como / por quê |
+| --- | --- | --- | --- | --- |
+| 1 | DTOs sem `@ApiProperty` | corrigida | BE-04 | CLI plugin do Swagger documenta os DTOs pelos tipos e pelo JSDoc |
+| 2 | sem prefixo `/v1` | mantida | BE-04 | é o contrato do frontend; sem `enableVersioning` |
+| 3 | sem `refresh`, `logout` nem `/auth/me` | mantida | BE-06 | o frontend não usa; a sessão vem do payload do JWT de 4 h |
+| 4 | sem endpoint de painel | mantida | — | o frontend calcula o painel no cliente; criar a rota pede uma issue própria |
+| 5 | sem listagem de estoque | corrigida | BE-07, BE-11 | `quantidadeMinima` no `Insumo` e `GET /estoque/insumos` |
+| 6 | estoque de produto acabado não exposto | corrigida | BE-12 | `GET /estoque/produtos` |
+| 7 | filtro de data das vendas com `YYYY-MM-DD` | corrigida | BE-13 | só aceita data e hora ISO 8601 completas, comparadas como instantes (o formato que a web já envia) |
+| 8 | filtros inválidos derrubam o serviço (500) | corrigida | BE-12, BE-13 | query validada por DTO → 400 |
+| 9 | venda concluída sem estoque fica `CONCLUIDA` | corrigida | BE-13 | baixa e status na mesma transação |
+| 10 | produção aceita saldo negativo de insumo | mantida | BE-11 | decisão de produto; pede uma issue própria |
+| 11 | produção não confere a empresa da receita e dos gastos | corrigida | BE-08, BE-12 | `buscarVariosDaEmpresa` e receita da empresa → 404 |
+| 12 | nome do insumo sem limite no DTO | corrigida | BE-07 | `@MaxLength(80)` e trim |
+| 13 | exclusão de insumo usado em receita | corrigida | BE-05, BE-07 | FK `RESTRICT` → 409 `INSUMO_EM_USO` |
+| 14 | sem endpoint de estoque mínimo | corrigida | BE-11 | `PATCH /estoque/insumos/:id/minimo` |
+| 15 | `ReceitaCusto` em `snake_case` | mantida | BE-10 | é o contrato do frontend |
+| 16 | links HATEOAS incorretos | corrigida | BE-04 | sem envelope: a resposta é o JSON do recurso |
+| 17 | seeds com `EMPRESA_ID = 1` fixo | corrigida | BE-14 | um seed só, pelos ids reais |
+| 18 | custo invisível soma todos os gastos da empresa | mantida | BE-09 | muda os números que o frontend mostra; o seed passa a gravar com a mesma regra (BE-14), então seed e API batem |
+| 19 | `GET /estoque/insumos/:id` de insumo inexistente → 404 | mantida | BE-11 | é o comportamento certo (inexistente ou de outra empresa) |
+| 20 | preço de venda sem arredondamento | corrigida | BE-10 | `round2` |
+| 21 | `PUT /receitas/:id` não remove a margem | corrigida | BE-09 | `margem_lucro: null` limpa margem e preço sugerido |
+| 22 | entrada de estoque sem `observacao` | corrigida | BE-05, BE-11 | campo opcional gravado na movimentação |
+| 23 | produção sem total de unidades | corrigida | BE-05, BE-12 | `totalUnidades` gravado |
+| 24 | `POST /vendas` não confere estoque | mantida | BE-13 | a barreira é a conclusão, como hoje |
+| 25 | `POST /vendas` aceita itens vazios | corrigida | BE-13 | `@ArrayNotEmpty()` |
+| 26 | `POST /vendas` não confere a empresa da receita | corrigida | BE-13 | receita de outra empresa → 404 |
+| 27 | simulação divide por preço 0 | corrigida | BE-10 | 400 `PRECO_INVALIDO` |
