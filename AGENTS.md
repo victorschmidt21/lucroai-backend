@@ -106,7 +106,7 @@ Previsto em issues futuras (não use antes de existir):
 
 | Caminho | O que é | Issue |
 | --- | --- | --- |
-| `domain/arredondamento.ts` | `round2`, `round4` e `round6` ([business-rules.md](docs/business-rules.md#arredondamento)) | primeira issue que precisar (BE-07 ou BE-08) |
+| `domain/arredondamento.ts` | `round2`, `round4` e `round6` ([business-rules.md](docs/business-rules.md#arredondamento)) | primeira issue que precisar (BE-08; a BE-07 não arredonda nada) |
 
 ## Convenções
 

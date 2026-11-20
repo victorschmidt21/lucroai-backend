@@ -16,7 +16,7 @@ Os microsserviços arredondam com `Number(valor.toFixed(n))`. O monolito usa **a
 | `round4(v)` | `Number(v.toFixed(4))` | margem realizada da venda |
 | `round6(v)` | `Number(v.toFixed(6))` | quantidades de estoque e saldos |
 
-As três ficam em `src/shared/domain/arredondamento.ts`, criado pela primeira issue que precisar delas (BE-07 ou BE-08).
+As três ficam em `src/shared/domain/arredondamento.ts`, criado pela primeira issue que precisar delas (BE-08: a BE-07 não arredonda nada).
 
 Valores e quantidades são `Float` no banco (`double precision`) e `number` na API, como hoje (BE-05). Todo valor calculado é arredondado **antes** de gravar.
 
@@ -55,12 +55,16 @@ Origem: `catalog-service/src/modules/insumos/domain/models/insumo.entity.ts` e `
 custoUnitario = quantidadeBaseCusto > 0 ? valorPago / quantidadeBaseCusto : 0
 ```
 
-- **Sem arredondamento** (`calcularCustoUnitario`). O custo unitário guarda a divisão inteira, e quem o usa arredonda depois (o item da receita, por exemplo).
+- **Sem arredondamento** (`calcularCustoUnitario`, em `insumos/domain/insumos.calculos.ts`). O custo unitário guarda a divisão inteira, e quem o usa arredonda depois (o item da receita, por exemplo).
 - Recalculado sempre que `valorPago` ou `quantidadeBaseCusto` mudam.
 - `precoUnitario` na resposta é um alias de `custoUnitario` (`insumo.dto.ts`), mantido por compatibilidade.
 - Validação: `quantidadeBaseCusto ≥ 0.000001`, `valorPago ≥ 0` e `quantidadeDisponivelInicial ≥ 0` (opcional).
 - **Muda (BE-07):** nome obrigatório, aparado e com até 80 caracteres (lacuna 12); excluir insumo usado em receita → 409 `INSUMO_EM_USO` (lacuna 13); resposta ganha `quantidadeMinima` (lacuna 5).
-- Criar com `quantidadeDisponivelInicial > 0` cria o estoque e uma movimentação `ENTRADA/COMPRA` na mesma transação (BE-07). Hoje isso acontece por evento (`insumo-criado.consumer.ts`).
+- Criar um insumo sempre cria o registro de estoque (saldo = `quantidadeDisponivelInicial ?? 0`, mínimo 0), na mesma transação, por `EstoqueService.criarRegistroInicial` (BE-07). Com quantidade > 0, cria também uma movimentação `ENTRADA/COMPRA` (sem `referenciaId`). Hoje o estoque nasce por evento (`insumo-criado.consumer.ts`), sem movimentação. O saldo inicial é gravado como veio, sem `round6`, como no consumer.
+- `quantidadeDisponivel` e `quantidadeMinima` da resposta vêm do estoque (`EstoqueService.saldosPorInsumo`); insumo sem registro de estoque responde 0 nos dois, como o catalog-service.
+- Listagem ordenada por nome (e por id no empate), sem paginação. Hoje a ordem é a do banco.
+- `PATCH` aceita só `nome`, `quantidadeBaseCusto`, `unidade` e `valorPago`; campo omitido mantém o valor salvo. O saldo muda só pelo estoque.
+- Excluir o insumo leva junto o estoque e as movimentações dele (`CASCADE`). Usado em receita → 409 `INSUMO_EM_USO` "Insumo usado em receitas não pode ser excluído" (P2003 da FK `RESTRICT`, traduzido no `InsumoRepository`).
 
 ## Gastos indiretos e rateio
 
