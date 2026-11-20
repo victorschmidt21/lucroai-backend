@@ -16,7 +16,7 @@ Os microsserviços arredondam com `Number(valor.toFixed(n))`. O monolito usa **a
 | `round4(v)` | `Number(v.toFixed(4))` | margem realizada da venda |
 | `round6(v)` | `Number(v.toFixed(6))` | quantidades de estoque e saldos |
 
-As três ficam em `src/shared/domain/arredondamento.ts`, criado pela primeira issue que precisar delas (BE-08: a BE-07 não arredonda nada).
+As três ficam em `src/shared/domain/arredondamento.ts` (BE-08), com teste unitário.
 
 Valores e quantidades são `Float` no banco (`double precision`) e `number` na API, como hoje (BE-05). Todo valor calculado é arredondado **antes** de gravar.
 
@@ -71,6 +71,11 @@ custoUnitario = quantidadeBaseCusto > 0 ? valorPago / quantidadeBaseCusto : 0
 Origem do cadastro: `catalog-service/src/modules/gastos-indiretos/` (`create-gasto-indireto.dto.ts`). Origem do rateio: `operations-service/src/modules/producoes/application/services/producao.service.ts` (`calcularValorRateado`) e `recipe-service/src/modules/custos/infra/providers/default-custo-invisivel-result.provider.ts`, que têm a mesma fórmula.
 
 - Descrição até 100 caracteres, `valor ≥ 0`, `metodo_rateio` obrigatório. **Muda (BE-08):** a descrição passa a ser obrigatória e aparada.
+- `valor` é gravado como veio, sem `round2`, como no catalog-service; o arredondamento acontece no rateio.
+- Listagem por `id` decrescente (o mais novo primeiro), como hoje. `PUT` com campos opcionais: campo omitido mantém o valor salvo.
+- Gasto de outra empresa ou inexistente → 404 `GASTO_INDIRETO_NAO_ENCONTRADO`.
+- Excluir um gasto não apaga os rateios das produções antigas: a FK `rateio_producao.gasto_indireto_id` é `SET NULL` e o rateio guarda a `descricao` (BE-05).
+- Para outros módulos, `GastoIndiretoService` exporta `listarPorEmpresa(empresaId, tx?)` e `buscarVariosDaEmpresa(ids, empresaId, tx?)`. Este último ignora ids repetidos, devolve `[]` para lista vazia e responde 404 se algum id não existir ou for de outra empresa (base da correção da lacuna 11, aplicada na produção pela BE-12).
 
 Rateio de um gasto para `lotes` lotes de uma receita com `totalUnidades = lotes × rendimento`:
 
@@ -80,7 +85,7 @@ Rateio de um gasto para `lotes` lotes de uma receita com `totalUnidades = lotes 
 | `PROPORCIONAL` | `round2(valor × lotes)` |
 | `POR_UNIDADE` | `round2(valor × totalUnidades)` |
 
-Método desconhecido cai no `FIXO` (o `default` do `switch`). Com o enum validado no DTO e no banco, isso não acontece no monolito.
+Método desconhecido cai no `FIXO` (o `default` do `switch`). Com o enum validado no DTO e no banco, isso não acontece no monolito: o `switch` é exaustivo sobre o tipo `MetodoRateio`, sem `default`.
 
 A função `calcularValorRateado` fica em `gastos-indiretos/domain/gastos-indiretos.calculos.ts` (BE-08) e é usada pelas receitas (custo invisível) e pelas produções.
 
