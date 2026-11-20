@@ -1,0 +1,70 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Post,
+  Put,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../../../../shared/infra/auth/current-user.decorator.js';
+import type { UsuarioAutenticado } from '../../../../shared/infra/auth/usuario-autenticado.js';
+import { CreateReceitaDto } from '../../application/dto/create-receita.dto.js';
+import type { ReceitaDto } from '../../application/dto/receita.dto.js';
+import { UpdateReceitaDto } from '../../application/dto/update-receita.dto.js';
+import { ReceitaService } from '../../application/services/receita.service.js';
+
+@ApiTags('receitas')
+@ApiBearerAuth()
+@Controller('receitas')
+export class ReceitasController {
+  constructor(private readonly service: ReceitaService) {}
+
+  /** Lista as receitas da empresa, a mais nova primeiro */
+  @Get()
+  list(@CurrentUser() usuario: UsuarioAutenticado): Promise<ReceitaDto[]> {
+    return this.service.list(usuario.empresa.id);
+  }
+
+  /** Detalha uma receita com os itens */
+  @Get(':id')
+  findById(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() usuario: UsuarioAutenticado,
+  ): Promise<ReceitaDto> {
+    return this.service.findById(id, usuario.empresa.id);
+  }
+
+  /** Cria uma receita e calcula o custo de 1 lote */
+  @Post()
+  create(
+    @Body() dto: CreateReceitaDto,
+    @CurrentUser() usuario: UsuarioAutenticado,
+  ): Promise<ReceitaDto> {
+    return this.service.create(dto, usuario.empresa.id);
+  }
+
+  /** Atualiza uma receita (campos opcionais; `margem_lucro: null` remove a margem) */
+  @Put(':id')
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateReceitaDto,
+    @CurrentUser() usuario: UsuarioAutenticado,
+  ): Promise<ReceitaDto> {
+    return this.service.update(id, dto, usuario.empresa.id);
+  }
+
+  /** Exclui uma receita (409 se usada em produção ou venda) */
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  delete(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() usuario: UsuarioAutenticado,
+  ): Promise<void> {
+    return this.service.delete(id, usuario.empresa.id);
+  }
+}
