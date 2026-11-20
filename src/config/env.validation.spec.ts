@@ -2,7 +2,7 @@ import { validate } from './env.validation.js';
 
 describe('validate (env)', () => {
   const DATABASE_URL =
-    'postgresql://lucroai:lucroai@localhost:55440/lucroai?schema=public';
+    'postgresql://lucroai:lucroai@localhost:55640/lucroai?schema=public';
 
   it('aplica os padrões em development', () => {
     expect(validate({ DATABASE_URL })).toMatchObject({

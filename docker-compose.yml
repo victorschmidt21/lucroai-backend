@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lucroai}
       POSTGRES_DB: ${POSTGRES_DB:-lucroai}
     ports:
-      - '${POSTGRES_PORT:-55440}:5432'
+      - '${POSTGRES_PORT:-55640}:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # Cria o banco lucroai_test (e2e) na primeira subida do volume

@@ -14,7 +14,7 @@ Backend do LucroAI: um único app NestJS (monolito modular) com um único banco 
 docker compose up --build
 ```
 
-Sobe o Postgres 17 (porta do host `55440`) e a API com hot reload na `3100`. Nenhum `.env` é necessário: o Compose tem valores padrão de desenvolvimento.
+Sobe o Postgres 17 (porta do host `55640`) e a API com hot reload na `3100`. Nenhum `.env` é necessário: o Compose tem valores padrão de desenvolvimento.
 
 ## Sem Docker
 
