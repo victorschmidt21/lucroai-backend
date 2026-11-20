@@ -18,7 +18,7 @@ O produto é inicial: entregue rápido e simples. O padrão de módulo é **mais
 | Framework | NestJS 12, TypeScript `strict` |
 | Banco | PostgreSQL 17 + Prisma ORM 7 (`@prisma/adapter-pg`) |
 | Validação | `class-validator` / `class-transformer` (DTOs), Zod (só variáveis de ambiente) |
-| Autenticação | JWT HS256 (`@nestjs/jwt`), senha com `argon2`, limite de tentativas com `@nestjs/throttler` no login |
+| Autenticação | JWT HS256 (`@nestjs/jwt`), senha com `argon2`, limite de tentativas com `@nestjs/throttler` no `AuthController` |
 | Documentação da API | `@nestjs/swagger` com CLI plugin, em `/docs` |
 | Testes | Vitest + Supertest |
 | Lint / formatação | oxlint + Prettier |
@@ -139,7 +139,7 @@ Previsto em issues futuras (não use antes de existir):
 
 - **JWT** HS256 com validade de 4 h, assinado com `JWT_SECRET` (mínimo de 32 caracteres fora de `development`/`test`). Guard global: toda rota exige `Authorization: Bearer`, menos as marcadas com `@Public()` (`/health`, `/auth/login`, `/auth/empresa`). Não existe rota `/internal`.
 - **Multiempresa**: o `empresaId` vem de `@CurrentUser().empresa.id`. O cliente nunca o envia. Ids recebidos no corpo (insumos, receitas, gastos) também são conferidos contra a empresa. Outra empresa → 404, nunca 403.
-- **Senhas** com `argon2`; a mesma mensagem para e-mail inexistente e senha errada. Limite de tentativas só no `AuthController`.
+- **Senhas** com `argon2`; a mesma mensagem para e-mail inexistente e senha errada. Limite de tentativas só no `AuthController` (`AuthThrottlerGuard`: 10 por minuto, contadas por IP **e** e-mail, porque todo mundo chega pelo IP do BFF).
 - **Sem CORS**: o navegador nunca chama a API, só o servidor do frontend (BFF).
 - **Segredos** só em variáveis de ambiente. O repositório é público: nada de `.env` real, token ou senha de produção em código, docs, testes ou CI.
 - Erro inesperado responde 500 com mensagem genérica, sem stack nem texto interno.

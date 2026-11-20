@@ -40,10 +40,12 @@ Valores e quantidades são `Float` no banco (`double precision`) e `number` na A
 
 Origem: `auth-service/src/modules/auth/application/services/auth.service.ts` e `auth.module.ts`.
 
-- Cadastro (`POST /auth/empresa`) cria empresa e usuário na mesma transação. CNPJ já cadastrado → 409 "CNPJ já cadastrado"; e-mail já cadastrado → 409 "E-mail já cadastrado".
-- Senha com `argon2` (hash no cadastro, `verify` no login). E-mail inexistente e senha errada dão a **mesma** resposta: 401 "Credenciais inválidas".
+- Cadastro (`POST /auth/empresa`) cria empresa e usuário na mesma transação. CNPJ já cadastrado → 409 `CNPJ_JA_CADASTRADO` "CNPJ já cadastrado"; e-mail já cadastrado → 409 `EMAIL_JA_CADASTRADO` "E-mail já cadastrado". Com os dois repetidos, vale o do CNPJ (a empresa é criada antes do usuário, como a ordem das conferências de hoje). A duplicidade é detectada pelo índice único do banco (`P2002`), o que também cobre dois cadastros simultâneos.
+- **Muda (BE-06):** `cnpj` e `nome_usuario` são opcionais; sem valor, ficam `null` no banco e no payload.
+- Senha com `argon2` (hash no cadastro, `verify` no login). E-mail inexistente e senha errada dão a **mesma** resposta: 401 `CREDENCIAIS_INVALIDAS` "Credenciais inválidas". Com e-mail inexistente, o login confere a senha contra um hash fictício, para o tempo de resposta não revelar quais e-mails existem.
 - JWT HS256, validade de **4 h**, payload `{ sub, email, nome, empresa: { id, nome, cnpj, segmento } }`. O frontend lê esse payload: não mude os nomes.
-- **Muda (BE-06):** o e-mail é normalizado (trim e minúsculas) no cadastro e no login.
+- **Muda (BE-06):** o e-mail é normalizado (trim e minúsculas) no cadastro e no login (`normalizarEmail` em `auth/domain/auth.calculos.ts`). O payload é montado por `montarPayloadJwt`, no mesmo arquivo.
+- Limite de tentativas (BE-06): `POST /auth/login` e `POST /auth/empresa` aceitam 10 requisições por minuto para cada par IP + e-mail; acima disso, 429 `MUITAS_REQUISICOES`. As outras rotas não têm limite (exigem token).
 
 ## Insumos
 
