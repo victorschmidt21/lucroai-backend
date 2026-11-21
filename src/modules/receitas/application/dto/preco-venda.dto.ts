@@ -1,4 +1,5 @@
 import { IsNumber, Min } from 'class-validator';
+import { round4 } from '../../../../shared/domain/arredondamento.js';
 import type { PrecoVenda } from '../../domain/receitas.calculos.js';
 
 /** Corpo de `POST /receitas/:id/preco-venda`. */
@@ -9,20 +10,20 @@ export class PrecoVendaBodyDto {
   margem_lucro: number;
 }
 
-/** Resposta em `snake_case`, como hoje; valores com `round2` (lacuna 20). */
+/** Resposta em `snake_case`, como hoje; valores com 4 casas (lacuna 20, BE-23). */
 export class PrecoVendaDto {
-  /** `custoUnitario` salvo da receita. @example 0.81 */
+  /** `custoUnitario` salvo da receita. @example 0.8083 */
   custo_total_unitario: number;
-  /** `round2(custo × (1 + margem_lucro))`. @example 1.3 */
+  /** `custo × (1 + margem_lucro)`. @example 1.2933 */
   preco_sugerido: number;
-  /** `round2(preco_sugerido − custo)`. @example 0.49 */
+  /** `preco_sugerido − custo`. @example 0.485 */
   lucro_por_unidade: number;
 }
 
 export function toPrecoVendaDto(preco: PrecoVenda): PrecoVendaDto {
   return {
-    custo_total_unitario: preco.custoUnitario,
-    preco_sugerido: preco.precoSugerido,
-    lucro_por_unidade: preco.lucroPorUnidade,
+    custo_total_unitario: round4(preco.custoUnitario),
+    preco_sugerido: round4(preco.precoSugerido),
+    lucro_por_unidade: round4(preco.lucroPorUnidade),
   };
 }

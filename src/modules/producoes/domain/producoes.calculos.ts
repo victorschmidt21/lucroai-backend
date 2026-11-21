@@ -1,4 +1,3 @@
-import { round2 } from '../../../shared/domain/arredondamento.js';
 import {
   calcularValorRateado,
   type GastoParaRateio,
@@ -33,7 +32,8 @@ export interface CalculoProducao {
  * O custo salvo da receita já tem o custo invisível com todos os gastos, e o
  * rateio soma os gastos de novo: é o comportamento atual, mantido junto com a
  * lacuna 18 (docs/business-rules.md#produções).
- * Origem: producao.service.ts (create) do operations-service.
+ * Origem: producao.service.ts (create) do operations-service. Sem
+ * arredondamento (BE-23): o `ProducaoDto` arredonda a resposta.
  */
 export function calcularProducao(
   receita: ReceitaParaProducao,
@@ -48,8 +48,7 @@ export function calcularProducao(
     valorRateado: calcularValorRateado(gasto, lotes, totalUnidades),
   }));
   const totalRateio = rateios.reduce((acc, r) => acc + r.valorRateado, 0);
-  const custoTotal = round2(custoBase + totalRateio);
-  const custoUnitario =
-    totalUnidades > 0 ? round2(custoTotal / totalUnidades) : 0;
+  const custoTotal = custoBase + totalRateio;
+  const custoUnitario = totalUnidades > 0 ? custoTotal / totalUnidades : 0;
   return { totalUnidades, custoTotal, custoUnitario, rateios };
 }

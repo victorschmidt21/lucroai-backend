@@ -27,9 +27,10 @@ import {
   type ReceitaDto,
   toReceitaDto,
 } from '../dto/receita.dto.js';
-import type {
-  SimulacaoCenarioDto,
-  SimularCenarioDto,
+import {
+  type SimulacaoCenarioDto,
+  type SimularCenarioDto,
+  toSimulacaoCenarioDto,
 } from '../dto/simular-cenario.dto.js';
 import type { UpdateReceitaDto } from '../dto/update-receita.dto.js';
 
@@ -163,7 +164,7 @@ export class ReceitaService {
     empresaId: number,
   ): Promise<SimulacaoCenarioDto> {
     const receita = await this.getOrFail(id, empresaId);
-    return simularCenario(dto, receita);
+    return toSimulacaoCenarioDto(simularCenario(dto, receita));
   }
 
   /** Preço de venda para a margem informada, com o custo salvo. Não grava nada. */
@@ -178,13 +179,17 @@ export class ReceitaService {
     );
   }
 
-  /** Para outros módulos (produções, vendas): a receita com os itens; 404 se não for da empresa. */
-  async buscarDaEmpresa(
+  /**
+   * Para outros módulos (produções, vendas): a receita com os itens; 404 se
+   * não for da empresa. Devolve os valores salvos **sem arredondar** (não o
+   * `ReceitaDto`), porque eles entram em outras contas (BE-23).
+   */
+  buscarDaEmpresa(
     id: number,
     empresaId: number,
     tx?: PrismaTransaction,
-  ): Promise<ReceitaDto> {
-    return toReceitaDto(await this.getOrFail(id, empresaId, tx));
+  ): Promise<ReceitaComItens> {
+    return this.getOrFail(id, empresaId, tx);
   }
 
   /** Insumos da empresa (404 se algum não for) e todos os gastos (lacuna 18). */

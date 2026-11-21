@@ -2,6 +2,7 @@ import type {
   Insumo,
   UnidadeMedida,
 } from '../../../../generated/prisma/client.js';
+import { round6 } from '../../../../shared/domain/arredondamento.js';
 
 interface Saldo {
   quantidadeDisponivel: number;
@@ -25,7 +26,7 @@ export class InsumoDto {
   unidade: UnidadeMedida;
   /** @example 5 */
   valorPago: number;
-  /** `valorPago / quantidadeBaseCusto`, sem arredondamento. @example 0.005 */
+  /** `valorPago / quantidadeBaseCusto`, com 6 casas (BE-23). @example 0.005 */
   custoUnitario: number;
   /** Alias de `custoUnitario`, mantido por compatibilidade. @example 0.005 */
   precoUnitario: number;
@@ -44,8 +45,8 @@ export function toInsumoDto(row: Insumo, saldo?: Saldo): InsumoDto {
     quantidadeMinima: saldo?.quantidadeMinima ?? 0,
     unidade: row.unidade,
     valorPago: row.valorPago,
-    custoUnitario: row.custoUnitario,
-    precoUnitario: row.custoUnitario,
+    custoUnitario: round6(row.custoUnitario),
+    precoUnitario: round6(row.custoUnitario),
     dataCriacao: row.dataCriacao,
   };
 }

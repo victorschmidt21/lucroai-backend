@@ -4,8 +4,9 @@ import {
   type GastoParaProducao,
 } from './producoes.calculos.js';
 
-// Números conferidos numa réplica literal de producao.service.ts (create) do
-// operations-service.
+// Fórmula de producao.service.ts (create) do operations-service, sem
+// arredondamento intermediário (BE-23).
+const P = 10;
 const aluguel: GastoParaProducao = {
   id: 1,
   descricao: 'Aluguel',
@@ -30,12 +31,16 @@ describe('calcularProducao', () => {
   it('total de unidades, rateio de cada método, custo total e unitário', () => {
     expect(calcularProducao(bolo, 3, [aluguel, embalagem, etiqueta])).toEqual({
       totalUnidades: 36,
-      custoTotal: 13492.14, // 3884.7 × 3 + 1800 + 37.5 + 0.54
-      custoUnitario: 374.78,
+      custoTotal: expect.closeTo(13492.14, P), // 3884.7 × 3 + 1800 + 37.5 + 0.54
+      custoUnitario: expect.closeTo(13492.14 / 36, P),
       rateios: [
         { gastoIndiretoId: 1, descricao: 'Aluguel', valorRateado: 1800 },
         { gastoIndiretoId: 2, descricao: 'Embalagem', valorRateado: 37.5 },
-        { gastoIndiretoId: 3, descricao: 'Etiqueta', valorRateado: 0.54 },
+        {
+          gastoIndiretoId: 3,
+          descricao: 'Etiqueta',
+          valorRateado: expect.closeTo(0.54, P),
+        },
       ],
     });
   });
@@ -43,8 +48,8 @@ describe('calcularProducao', () => {
   it('lista de gastos vazia não rateia nada', () => {
     expect(calcularProducao(bolo, 3, [])).toEqual({
       totalUnidades: 36,
-      custoTotal: 11654.1,
-      custoUnitario: 323.73,
+      custoTotal: expect.closeTo(11654.1, P),
+      custoUnitario: expect.closeTo(323.725, P),
       rateios: [],
     });
   });
@@ -56,20 +61,19 @@ describe('calcularProducao', () => {
       ]),
     ).toMatchObject({
       totalUnidades: 100,
-      custoTotal: 1.5,
-      custoUnitario: 0.01,
+      custoTotal: expect.closeTo(1.5, P),
+      custoUnitario: expect.closeTo(0.015, P),
     });
   });
 
-  it('arredonda com o round2 de toFixed', () => {
-    // 0.015 × 50 = 0.75; 9.92 + 0.75 = 10.67; 10.67 / 50 = 0.2134
+  it('não arredonda o custo total nem o unitário (BE-23)', () => {
+    // 0.015 × 50 = 0.75; 9.915 + 0.75 = 10.665; 10.665 / 50 = 0.2133
     expect(
-      calcularProducao({ custoProducao: 9.92, rendimento: 50 }, 1, [etiqueta]),
-    ).toMatchObject({ custoTotal: 10.67, custoUnitario: 0.21 });
-    // (1.005).toFixed(2) dá '1.00'
-    expect(
-      calcularProducao({ custoProducao: 1.005, rendimento: 1 }, 1, []),
-    ).toMatchObject({ custoTotal: 1, custoUnitario: 1 });
+      calcularProducao({ custoProducao: 9.915, rendimento: 50 }, 1, [etiqueta]),
+    ).toMatchObject({
+      custoTotal: expect.closeTo(10.665, P),
+      custoUnitario: expect.closeTo(0.2133, P),
+    });
   });
 
   it('sem unidades, custo unitário 0', () => {

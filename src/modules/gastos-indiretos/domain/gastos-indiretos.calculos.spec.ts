@@ -8,10 +8,10 @@ describe('calcularValorRateado', () => {
     ).toBe(1800);
   });
 
-  it('FIXO arredonda o valor com round2', () => {
+  it('FIXO não arredonda o valor (BE-23)', () => {
     expect(
       calcularValorRateado({ valor: 10.456, metodoRateio: 'FIXO' }, 1, 1),
-    ).toBe(10.46);
+    ).toBe(10.456);
   });
 
   it('PROPORCIONAL multiplica pelos lotes', () => {
@@ -24,11 +24,14 @@ describe('calcularValorRateado', () => {
     ).toBe(37.5);
   });
 
-  it('PROPORCIONAL arredonda o produto com round2', () => {
-    // 0.1 × 3 = 0.30000000000000004
+  it('PROPORCIONAL não arredonda o produto (BE-23)', () => {
     expect(
-      calcularValorRateado({ valor: 0.1, metodoRateio: 'PROPORCIONAL' }, 3, 30),
-    ).toBe(0.3);
+      calcularValorRateado(
+        { valor: 0.125, metodoRateio: 'PROPORCIONAL' },
+        3,
+        30,
+      ),
+    ).toBe(0.375);
   });
 
   it('POR_UNIDADE multiplica pelo total de unidades', () => {
@@ -37,15 +40,15 @@ describe('calcularValorRateado', () => {
     ).toBe(10);
   });
 
-  it('POR_UNIDADE arredonda com o round2 de toFixed', () => {
-    // 0.015 × 101 = 1.515 no ponto flutuante, e toFixed(2) dá '1.51'
+  it('POR_UNIDADE não arredonda o produto (BE-23)', () => {
+    // era round2 → 1.51
     expect(
       calcularValorRateado(
         { valor: 0.015, metodoRateio: 'POR_UNIDADE' },
         1,
         101,
       ),
-    ).toBe(1.51);
+    ).toBeCloseTo(1.515, 12);
   });
 
   it('valor 0 dá rateio 0', () => {

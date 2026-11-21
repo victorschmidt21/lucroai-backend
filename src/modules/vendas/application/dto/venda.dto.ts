@@ -3,6 +3,7 @@ import type {
   StatusVenda,
   Venda,
 } from '../../../../generated/prisma/client.js';
+import { round2, round4 } from '../../../../shared/domain/arredondamento.js';
 
 export class ItemVendaDto {
   /** @example 1 */
@@ -15,7 +16,7 @@ export class ItemVendaDto {
   quantidade: number;
   /** @example 12.5 */
   precoUnitarioReal: number;
-  /** Custo unitário da receita na hora da venda. @example 7.3456 */
+  /** Custo unitário da receita na hora da venda, com 4 casas. @example 7.3456 */
   custoUnitario: number | null;
   /** Fração com 4 casas; pode ser negativa. @example 0.4124 */
   margemRealizada: number | null;
@@ -26,7 +27,7 @@ export class VendaDto {
   id: number;
   /** @example 1 */
   empresaId: number;
-  /** @example 25 */
+  /** Com 2 casas. @example 25 */
   total: number | null;
   /** @example 'PENDENTE' */
   status: StatusVenda;
@@ -37,11 +38,12 @@ export class VendaDto {
 
 export type VendaComItens = Venda & { itens: ItemVenda[] };
 
+/** O banco guarda os valores sem arredondar; só a resposta arredonda (BE-23). */
 export function toVendaDto(row: VendaComItens): VendaDto {
   return {
     id: row.id,
     empresaId: row.empresaId,
-    total: row.total,
+    total: row.total == null ? null : round2(row.total),
     status: row.status,
     dataVenda: row.dataVenda,
     itens: row.itens.map((item) => ({
@@ -50,8 +52,10 @@ export function toVendaDto(row: VendaComItens): VendaDto {
       receitaId: item.receitaId,
       quantidade: item.quantidade,
       precoUnitarioReal: item.precoUnitarioReal,
-      custoUnitario: item.custoUnitario,
-      margemRealizada: item.margemRealizada,
+      custoUnitario:
+        item.custoUnitario == null ? null : round4(item.custoUnitario),
+      margemRealizada:
+        item.margemRealizada == null ? null : round4(item.margemRealizada),
     })),
   };
 }

@@ -1,4 +1,6 @@
 import { IsInt, IsNumber, IsOptional, IsPositive } from 'class-validator';
+import { round2, round4 } from '../../../../shared/domain/arredondamento.js';
+import type { SimulacaoCenario } from '../../domain/receitas.calculos.js';
 
 /** Corpo de `POST /receitas/:id/simular`; campo omitido usa o valor salvo. */
 export class SimularCenarioDto {
@@ -23,16 +25,29 @@ export class SimularCenarioDto {
 
 /** Resposta de `POST /receitas/:id/simular` (`simulacao-cenario-resultado.dto.ts`). */
 export class SimulacaoCenarioDto {
-  /** @example 0.9 */
+  /** Com 4 casas. @example 0.9 */
   custoUnitario: number;
-  /** @example 1.5 */
+  /** Com 4 casas. @example 1.5 */
   precoVenda: number;
   /** @example 100 */
   volume: number;
-  /** `round2((preço − custo) × volume)`. @example 60 */
+  /** `(preço − custo) × volume`, com 2 casas. @example 60 */
   lucroEstimado: number;
-  /** Fração com 2 casas, pode ser negativa. @example 0.4 */
+  /** Fração com 4 casas (BE-23), pode ser negativa. @example 0.4 */
   margemProjetada: number;
   /** `ceil(custo × volume / preço)`, em unidades. @example 60 */
   breakEven: number;
+}
+
+export function toSimulacaoCenarioDto(
+  cenario: SimulacaoCenario,
+): SimulacaoCenarioDto {
+  return {
+    custoUnitario: round4(cenario.custoUnitario),
+    precoVenda: round4(cenario.precoVenda),
+    volume: cenario.volume,
+    lucroEstimado: round2(cenario.lucroEstimado),
+    margemProjetada: round4(cenario.margemProjetada),
+    breakEven: cenario.breakEven,
+  };
 }

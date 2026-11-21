@@ -1,4 +1,3 @@
-import { round2, round4 } from '../../../shared/domain/arredondamento.js';
 import {
   BusinessRuleError,
   InvalidInputError,
@@ -75,24 +74,25 @@ export class Venda {
     };
   }
 
-  /** `round4((preço − custo) / preço)`; `null` sem custo. Pode ser negativa. */
+  /**
+   * `(preço − custo) / preço`; `null` sem custo. Pode ser negativa. Sem
+   * arredondar (BE-23): o `VendaDto` arredonda com `round4`.
+   */
   static calcularMargemRealizada(
     precoUnitarioReal: number,
     custoUnitario: number | null,
   ): number | null {
     if (custoUnitario == null) return null;
-    return round4((precoUnitarioReal - custoUnitario) / precoUnitarioReal);
+    return (precoUnitarioReal - custoUnitario) / precoUnitarioReal;
   }
 
-  /** `round2(Σ quantidade × preço)`. */
+  /** `Σ quantidade × preço`, sem arredondar (o `VendaDto` usa `round2`). */
   static calcularTotal(
     itens: Pick<ItemNovaVenda, 'quantidade' | 'precoUnitarioReal'>[],
   ): number {
-    return round2(
-      itens.reduce(
-        (acc, item) => acc + item.quantidade * item.precoUnitarioReal,
-        0,
-      ),
+    return itens.reduce(
+      (acc, item) => acc + item.quantidade * item.precoUnitarioReal,
+      0,
     );
   }
 

@@ -19,6 +19,7 @@ import {
   type StatusVenda,
   type UnidadeMedida,
 } from '../src/generated/prisma/client.js';
+import { round2 } from '../src/shared/domain/arredondamento.js';
 import {
   calcularQuantidadeBaixa,
   calcularSaidaProdutoAcabado,
@@ -564,7 +565,9 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
         return {
           receitaId: r.id,
           quantidade,
-          precoUnitarioReal: r.precoSugerido,
+          // O preço cobrado tem centavos, como o digitado na tela; o preço
+          // sugerido é guardado sem arredondar (BE-23).
+          precoUnitarioReal: round2(r.precoSugerido),
           custoUnitario: r.custoUnitario,
         };
       }),

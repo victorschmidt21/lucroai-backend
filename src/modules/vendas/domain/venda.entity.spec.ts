@@ -5,13 +5,17 @@ import {
 } from '../../../shared/domain/errors/domain.error.js';
 import { type StatusVenda, Venda } from './venda.entity.js';
 
-// Números conferidos numa réplica literal de venda.service.ts (create) do
-// sales-service: margem com toFixed(4) e total com toFixed(2).
+// Fórmulas de venda.service.ts (create) do sales-service, sem arredondar
+// (BE-23): o VendaDto arredonda a margem com round4 e o total com round2.
+const P = 10;
 
 describe('Venda.calcularMargemRealizada', () => {
-  it('(preço − custo) / preço com round4', () => {
+  it('(preço − custo) / preço, sem arredondar', () => {
     // (12 − 7.3456) / 12 = 0.38786666…
-    expect(Venda.calcularMargemRealizada(12, 7.3456)).toBe(0.3879);
+    expect(Venda.calcularMargemRealizada(12, 7.3456)).toBeCloseTo(
+      0.3878666667,
+      P,
+    );
   });
 
   it('pode ser negativa quando o preço é menor que o custo', () => {
@@ -24,14 +28,13 @@ describe('Venda.calcularMargemRealizada', () => {
 });
 
 describe('Venda.calcularTotal', () => {
-  it('Σ quantidade × preço com round2', () => {
-    // 3 × 0.1 = 0.30000000000000004; + 2 × 10.555 = 21.41
+  it('Σ quantidade × preço, sem arredondar', () => {
     expect(
       Venda.calcularTotal([
         { quantidade: 3, precoUnitarioReal: 0.1 },
         { quantidade: 2, precoUnitarioReal: 10.555 },
       ]),
-    ).toBe(21.41);
+    ).toBeCloseTo(21.41, P);
   });
 });
 
@@ -62,7 +65,7 @@ describe('Venda.nova', () => {
           quantidade: 2,
           precoUnitarioReal: 12,
           custoUnitario: 7.3456,
-          margemRealizada: 0.3879,
+          margemRealizada: expect.closeTo(0.3878666667, P),
         },
         {
           receitaId: 2,

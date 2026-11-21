@@ -84,22 +84,21 @@ export class InsumoService {
 
   /**
    * Para outros módulos (receitas): os insumos dos ids informados, ignorando
-   * repetidos. 404 se algum não existir ou for de outra empresa.
+   * repetidos. 404 se algum não existir ou for de outra empresa. Devolve o
+   * custo unitário salvo **sem arredondar** (não o `InsumoDto`, que tem 6
+   * casas), porque ele entra no custo da receita (BE-23).
    */
   async buscarVariosDaEmpresa(
     ids: number[],
     empresaId: number,
-  ): Promise<InsumoDto[]> {
+  ): Promise<Insumo[]> {
     const unicos = [...new Set(ids)];
     if (unicos.length === 0) return [];
-    const [rows, saldos] = await Promise.all([
-      this.repository.listByIdsAndEmpresa(unicos, empresaId),
-      this.estoqueService.saldosPorInsumo(empresaId, unicos),
-    ]);
+    const rows = await this.repository.listByIdsAndEmpresa(unicos, empresaId);
     if (rows.length !== unicos.length) {
       throw new NotFoundError('INSUMO_NAO_ENCONTRADO', 'Insumo não encontrado');
     }
-    return rows.map((row) => toInsumoDto(row, saldos.get(row.id)));
+    return rows;
   }
 
   private async comSaldo(row: Insumo): Promise<InsumoDto> {

@@ -11,9 +11,12 @@ import {
   simularCenario,
 } from './receitas.calculos.js';
 
-// Insumos e gastos do seed dos microsserviços (catalog-service). Os números
-// esperados saíram da aritmética do custo.service.ts e do
-// default-custo-invisivel-result.provider.ts do recipe-service.
+// Insumos e gastos do seed dos microsserviços (catalog-service). As fórmulas
+// são as do custo.service.ts e do default-custo-invisivel-result.provider.ts
+// do recipe-service, mas sem arredondamento intermediário (BE-23): os valores
+// esperados são os exatos, comparados com `toBeCloseTo` por causa do ponto
+// flutuante. Quem arredonda são os DTOs de resposta.
+const P = 10;
 const custo = {
   farinha: 15 / 5,
   sal: 2.5 / 1,
@@ -32,10 +35,10 @@ const gastosSeed: GastoParaRateio[] = [
 ];
 
 describe('calcularCustoItem', () => {
-  it('arredonda quantidade × custo unitário com o round2 de toFixed', () => {
-    // 15 × 0.017 = 0.255… e toFixed(2) dá '0.26', como no seed
-    expect(calcularCustoItem(15, custo.fermento)).toBe(0.26);
-    expect(calcularCustoItem(0.02, custo.sal)).toBe(0.05);
+  it('quantidade × custo unitário, sem arredondar (BE-23)', () => {
+    // 15 g × R$ 0,017 = R$ 0,255 (era round2 → 0,26)
+    expect(calcularCustoItem(15, custo.fermento)).toBeCloseTo(0.255, P);
+    expect(calcularCustoItem(0.02, custo.sal)).toBeCloseTo(0.05, P);
   });
 });
 
@@ -60,7 +63,7 @@ describe('calcularCustoInvisivel', () => {
         [{ valor: 0.015, metodoRateio: 'POR_UNIDADE' }],
         101,
       ),
-    ).toBe(1.51);
+    ).toBeCloseTo(1.515, P);
   });
 
   it('sem gastos é 0', () => {
@@ -74,8 +77,8 @@ describe('calcularCustoInvisivel', () => {
 });
 
 describe('calcularPrecoSugerido', () => {
-  it('com margem', () => {
-    expect(calcularPrecoSugerido(0.81, 0.5)).toBe(1.22);
+  it('com margem, sem arredondar', () => {
+    expect(calcularPrecoSugerido(0.81, 0.5)).toBeCloseTo(1.215, P);
   });
 
   it('sem margem é null', () => {
@@ -88,7 +91,9 @@ describe('calcularPrecoSugerido', () => {
 });
 
 describe('calcularCustoReceita', () => {
-  it('Pão Francês do seed, sem gastos, bate com os valores salvos', () => {
+  it('custo dos ingredientes sem arredondar os itens: R$ 3,305, não R$ 3,31 (BE-23)', () => {
+    // Farinha 1 kg a R$ 3,00/kg, sal 0,02 kg a R$ 2,50/kg e fermento 15 g a
+    // R$ 0,017/g.
     expect(
       calcularCustoReceita({
         itens: paoFrances,
@@ -99,15 +104,24 @@ describe('calcularCustoReceita', () => {
     ).toEqual({
       itens: [
         { insumoId: 1, quantidade: 1, custoCalculado: 3 },
-        { insumoId: 8, quantidade: 0.02, custoCalculado: 0.05 },
-        { insumoId: 6, quantidade: 15, custoCalculado: 0.26 },
+        {
+          insumoId: 8,
+          quantidade: 0.02,
+          custoCalculado: expect.closeTo(0.05, P),
+        },
+        {
+          insumoId: 6,
+          quantidade: 15,
+          custoCalculado: expect.closeTo(0.255, P),
+        },
       ],
       lotes: 1,
       totalUnidades: 50,
+      custoIngredientes: expect.closeTo(3.305, P),
       custoInvisivel: 0,
-      custoProducao: 3.31,
-      custoUnitario: 0.07,
-      precoSugerido: 0.11,
+      custoProducao: expect.closeTo(3.305, P),
+      custoUnitario: expect.closeTo(0.0661, P),
+      precoSugerido: expect.closeTo(0.10576, P),
     });
   });
 
@@ -119,9 +133,9 @@ describe('calcularCustoReceita', () => {
       gastos: gastosSeed,
     });
     expect(r.custoInvisivel).toBe(8435);
-    expect(r.custoProducao).toBe(8438.31);
-    expect(r.custoUnitario).toBe(168.77);
-    expect(r.precoSugerido).toBe(270.03);
+    expect(r.custoProducao).toBeCloseTo(8438.305, P);
+    expect(r.custoUnitario).toBeCloseTo(168.7661, P);
+    expect(r.precoSugerido).toBeCloseTo(270.02576, P);
   });
 
   it('Bolo de Chocolate do seed com gastos', () => {
@@ -139,13 +153,14 @@ describe('calcularCustoReceita', () => {
       margemLucro: 0.5,
       gastos: gastosSeed,
     });
-    expect(r.itens.map((i) => i.custoCalculado)).toEqual([
-      0.75, 0.88, 2.4, 2.25, 1, 2.25, 0.17,
-    ]);
+    expect(r.itens.map((i) => i.custoCalculado)).toEqual(
+      [0.75, 0.88, 2.4, 2.25, 1, 2.25, 0.17].map((v) => expect.closeTo(v, P)),
+    );
+    expect(r.custoIngredientes).toBeCloseTo(9.7, P);
     expect(r.custoInvisivel).toBe(3875);
-    expect(r.custoProducao).toBe(3884.7);
-    expect(r.custoUnitario).toBe(323.72);
-    expect(r.precoSugerido).toBe(485.58);
+    expect(r.custoProducao).toBeCloseTo(3884.7, P);
+    expect(r.custoUnitario).toBeCloseTo(323.725, P);
+    expect(r.precoSugerido).toBeCloseTo(485.5875, P);
   });
 
   it('sem margem não tem preço sugerido', () => {
@@ -155,7 +170,7 @@ describe('calcularCustoReceita', () => {
       margemLucro: null,
       gastos: [],
     });
-    expect(r.custoUnitario).toBe(0.07);
+    expect(r.custoUnitario).toBeCloseTo(0.0661, P);
     expect(r.precoSugerido).toBeNull();
   });
 
@@ -190,7 +205,7 @@ describe('calcularCustoReceita para N lotes', () => {
     expect(r.totalUnidades).toBe(50);
   });
 
-  it('Pão Francês, 3 lotes, sem gastos: o item arredonda a quantidade × lotes', () => {
+  it('Pão Francês, 3 lotes, sem gastos: o item multiplica a quantidade pelos lotes', () => {
     const r = calcularCustoReceita({
       itens: paoFrances,
       rendimento: 50,
@@ -198,18 +213,26 @@ describe('calcularCustoReceita para N lotes', () => {
       gastos: [],
       lotes: 3,
     });
-    // fermento: 45 × 0.017 → 0.77 (e não 3 × 0.26 = 0.78)
+    // fermento: 45 × 0.017 = 0.765
     expect(r.itens).toEqual([
       { insumoId: 1, quantidade: 3, custoCalculado: 9 },
-      { insumoId: 8, quantidade: 0.06, custoCalculado: 0.15 },
-      { insumoId: 6, quantidade: 45, custoCalculado: 0.77 },
+      {
+        insumoId: 8,
+        quantidade: 0.06,
+        custoCalculado: expect.closeTo(0.15, P),
+      },
+      {
+        insumoId: 6,
+        quantidade: 45,
+        custoCalculado: expect.closeTo(0.765, P),
+      },
     ]);
     expect(r).toMatchObject({
       lotes: 3,
       totalUnidades: 150,
       custoInvisivel: 0,
-      custoProducao: 9.92,
-      custoUnitario: 0.07,
+      custoProducao: expect.closeTo(9.915, P),
+      custoUnitario: expect.closeTo(0.0661, P),
     });
   });
 
@@ -222,8 +245,8 @@ describe('calcularCustoReceita para N lotes', () => {
       lotes: 3,
     });
     expect(r.custoInvisivel).toBe(21705);
-    expect(r.custoProducao).toBe(21714.92);
-    expect(r.custoUnitario).toBe(144.77);
+    expect(r.custoProducao).toBeCloseTo(21714.915, P);
+    expect(r.custoUnitario).toBeCloseTo(144.7661, P);
   });
 
   it('Bolo de Chocolate, 7 lotes, com gastos dos três métodos', () => {
@@ -246,13 +269,16 @@ describe('calcularCustoReceita para N lotes', () => {
       ],
       lotes: 7,
     });
-    expect(r.itens.map((i) => i.custoCalculado)).toEqual([
-      5.25, 6.16, 16.8, 15.75, 7, 15.75, 1.19,
-    ]);
+    expect(r.itens.map((i) => i.custoCalculado)).toEqual(
+      [5.25, 6.16, 16.8, 15.75, 7, 15.75, 1.19].map((v) =>
+        expect.closeTo(v, P),
+      ),
+    );
     expect(r.totalUnidades).toBe(84);
-    expect(r.custoInvisivel).toBe(36.86);
-    expect(r.custoProducao).toBe(104.76);
-    expect(r.custoUnitario).toBe(1.25);
+    // 12.5 + 0.015 × 84 + 3.3 × 7
+    expect(r.custoInvisivel).toBeCloseTo(36.86, P);
+    expect(r.custoProducao).toBeCloseTo(104.76, P);
+    expect(r.custoUnitario).toBeCloseTo(104.76 / 84, P);
   });
 });
 
@@ -264,8 +290,8 @@ describe('simularCenario', () => {
       custoUnitario: 0.07,
       precoVenda: 0.11,
       volume: 50,
-      lucroEstimado: 2,
-      margemProjetada: 0.36,
+      lucroEstimado: expect.closeTo(2, P),
+      margemProjetada: expect.closeTo(0.04 / 0.11, P),
       breakEven: 32,
     });
   });
@@ -277,8 +303,8 @@ describe('simularCenario', () => {
       custoUnitario: 0.81,
       precoVenda: 1.22,
       volume: 37,
-      lucroEstimado: 15.17,
-      margemProjetada: 0.34,
+      lucroEstimado: expect.closeTo(15.17, P),
+      margemProjetada: expect.closeTo(0.41 / 1.22, P),
       breakEven: 25,
     });
   });
@@ -291,9 +317,17 @@ describe('simularCenario', () => {
       precoVenda: 1.5,
       volume: 100,
       lucroEstimado: -50,
-      margemProjetada: -0.33,
+      margemProjetada: expect.closeTo(-1 / 3, P),
       breakEven: 134,
     });
+  });
+
+  it('break-even ignora o ruído do ponto flutuante', () => {
+    // 0.1 × 3 / 0.1 = 3.0000000000000004: o teto direto daria 4
+    expect(
+      simularCenario({ novoCusto: 0.1, novoPreco: 0.1, volume: 3 }, pao)
+        .breakEven,
+    ).toBe(3);
   });
 
   it('sem custo salvo nem novoCusto → 400 RECEITA_SEM_CUSTO', () => {
@@ -330,17 +364,16 @@ describe('simularCenario', () => {
 });
 
 describe('calcularPrecoVenda', () => {
-  it('arredonda o preço e o lucro (lacuna 20)', () => {
-    // hoje: preco_sugerido 72.11200000000001 e lucro 27.04200000000001
+  it('preço e lucro sem arredondar (o DTO arredonda, BE-23)', () => {
     expect(calcularPrecoVenda(45.07, 0.6)).toEqual({
       custoUnitario: 45.07,
-      precoSugerido: 72.11,
-      lucroPorUnidade: 27.04,
+      precoSugerido: expect.closeTo(72.112, P),
+      lucroPorUnidade: expect.closeTo(27.042, P),
     });
-    expect(calcularPrecoVenda(0.07, 0.6)).toEqual({
-      custoUnitario: 0.07,
-      precoSugerido: 0.11,
-      lucroPorUnidade: 0.04,
+    expect(calcularPrecoVenda(0.0661, 0.6)).toEqual({
+      custoUnitario: 0.0661,
+      precoSugerido: expect.closeTo(0.10576, P),
+      lucroPorUnidade: expect.closeTo(0.03966, P),
     });
   });
 

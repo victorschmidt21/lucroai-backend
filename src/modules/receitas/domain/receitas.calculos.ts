@@ -1,4 +1,4 @@
-import { round2 } from '../../../shared/domain/arredondamento.js';
+import { round6 } from '../../../shared/domain/arredondamento.js';
 import { InvalidInputError } from '../../../shared/domain/errors/domain.error.js';
 import {
   calcularValorRateado,
@@ -34,6 +34,8 @@ export interface CustoReceita {
   lotes: number;
   /** `rendimento × lotes`. */
   totalUnidades: number;
+  /** Soma dos itens (custo dos ingredientes). */
+  custoIngredientes: number;
   custoInvisivel: number;
   custoProducao: number;
   custoUnitario: number;
@@ -41,12 +43,16 @@ export interface CustoReceita {
   precoSugerido: number | null;
 }
 
-/** `round2(quantidade × custoUnitario)`. Origem: `calcularItens` do `custo.service.ts`. */
+/**
+ * `quantidade × custoUnitario`, **sem arredondar** (BE-23): o custo do item
+ * entra na soma da receita. Origem: `calcularItens` do `custo.service.ts`,
+ * que arredondava cada item com `round2`.
+ */
 export function calcularCustoItem(
   quantidade: number,
   custoUnitario: number,
 ): number {
-  return round2(quantidade * custoUnitario);
+  return quantidade * custoUnitario;
 }
 
 /**
@@ -59,12 +65,10 @@ export function calcularCustoInvisivel(
   rendimento: number,
   lotes = 1,
 ): number {
-  return round2(
-    gastos.reduce(
-      (total, gasto) =>
-        total + calcularValorRateado(gasto, lotes, rendimento * lotes),
-      0,
-    ),
+  return gastos.reduce(
+    (total, gasto) =>
+      total + calcularValorRateado(gasto, lotes, rendimento * lotes),
+    0,
   );
 }
 
@@ -74,13 +78,14 @@ export function calcularPrecoSugerido(
   margemLucro: number | null,
 ): number | null {
   if (margemLucro == null) return null;
-  return round2(custoUnitario * (1 + margemLucro));
+  return custoUnitario * (1 + margemLucro);
 }
 
 /**
  * Custo de `lotes` lotes da receita (1 se omitido). Origem: `calcularReceita`
- * do `custo.service.ts` (recipe-service), com os mesmos arredondamentos: a
- * quantidade do item é multiplicada pelos lotes antes do custo do item.
+ * do `custo.service.ts` (recipe-service): a quantidade do item é multiplicada
+ * pelos lotes antes do custo do item. Sem arredondamento intermediário
+ * (BE-23): quem arredonda são os DTOs de resposta.
  */
 export function calcularCustoReceita(input: CustoReceitaInput): CustoReceita {
   if (input.rendimento <= 0) {
@@ -98,8 +103,9 @@ export function calcularCustoReceita(input: CustoReceitaInput): CustoReceita {
       custoCalculado: calcularCustoItem(quantidade, item.custoUnitario),
     };
   });
-  const custoBase = round2(
-    itens.reduce((total, item) => total + item.custoCalculado, 0),
+  const custoIngredientes = itens.reduce(
+    (total, item) => total + item.custoCalculado,
+    0,
   );
   const totalUnidades = input.rendimento * lotes;
   const custoInvisivel = calcularCustoInvisivel(
@@ -107,12 +113,13 @@ export function calcularCustoReceita(input: CustoReceitaInput): CustoReceita {
     input.rendimento,
     lotes,
   );
-  const custoProducao = round2(custoBase + custoInvisivel);
-  const custoUnitario = round2(custoProducao / totalUnidades);
+  const custoProducao = custoIngredientes + custoInvisivel;
+  const custoUnitario = custoProducao / totalUnidades;
   return {
     itens,
     lotes,
     totalUnidades,
+    custoIngredientes,
     custoInvisivel,
     custoProducao,
     custoUnitario,
@@ -138,7 +145,7 @@ export interface SimulacaoCenario {
   precoVenda: number;
   volume: number;
   lucroEstimado: number;
-  /** Fração com 2 casas (pode ser negativa). */
+  /** Fração (pode ser negativa). */
   margemProjetada: number;
   /** Unidades para cobrir o custo do volume. */
   breakEven: number;
@@ -147,7 +154,7 @@ export interface SimulacaoCenario {
 /**
  * Simulação de cenário. Origem: `simular` do `simulacao.service.ts`
  * (recipe-service), com as mesmas mensagens. Preço 0 → 400 `PRECO_INVALIDO`
- * em vez de `NaN` (lacuna 27).
+ * em vez de `NaN` (lacuna 27). Sem arredondar (BE-23), menos o break-even.
  */
 export function simularCenario(
   entrada: SimulacaoEntrada,
@@ -176,12 +183,14 @@ export function simularCenario(
   const volume = entrada.volume ?? receita.rendimento;
   const margemPorUnidade = preco - custo;
   return {
-    custoUnitario: round2(custo),
-    precoVenda: round2(preco),
+    custoUnitario: custo,
+    precoVenda: preco,
     volume,
-    lucroEstimado: round2(margemPorUnidade * volume),
-    margemProjetada: round2(margemPorUnidade / preco),
-    breakEven: Math.ceil((custo * volume) / preco),
+    lucroEstimado: margemPorUnidade * volume,
+    margemProjetada: margemPorUnidade / preco,
+    // O break-even já é a saída (unidades inteiras). O round6 tira o ruído do
+    // ponto flutuante antes do teto: 60.00000000000001 não pode virar 61.
+    breakEven: Math.ceil(round6((custo * volume) / preco)),
   };
 }
 
@@ -193,7 +202,8 @@ export interface PrecoVenda {
 
 /**
  * Preço de venda para uma margem, sem gravar. Origem: `calcularPrecoVenda`
- * do `receita.service.ts` (recipe-service), agora com `round2` (lacuna 20).
+ * do `receita.service.ts` (recipe-service). Sem arredondar (BE-23): o DTO
+ * arredonda a resposta (lacuna 20).
  */
 export function calcularPrecoVenda(
   custoUnitario: number | null,
@@ -205,11 +215,11 @@ export function calcularPrecoVenda(
       'Receita sem custo calculado',
     );
   }
-  const precoSugerido = round2(custoUnitario * (1 + margemLucro));
+  const precoSugerido = custoUnitario * (1 + margemLucro);
   return {
     custoUnitario,
     precoSugerido,
-    lucroPorUnidade: round2(precoSugerido - custoUnitario),
+    lucroPorUnidade: precoSugerido - custoUnitario,
   };
 }
 

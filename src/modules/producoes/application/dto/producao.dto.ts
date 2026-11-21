@@ -2,13 +2,14 @@ import type {
   Producao,
   RateioProducao,
 } from '../../../../generated/prisma/client.js';
+import { round2, round4 } from '../../../../shared/domain/arredondamento.js';
 
 export class RateioProducaoDto {
   /** Continua o mesmo depois de o gasto ser excluído (sem FK). @example 1 */
   gastoIndiretoId: number;
   /** Novo (BE-12): descrição do gasto na hora da produção. @example 'Aluguel' */
   descricao: string;
-  /** @example 1800 */
+  /** Com 2 casas. @example 1800 */
   valorRateado: number;
 }
 
@@ -23,9 +24,9 @@ export class ProducaoDto {
   quantidade: number;
   /** Novo (BE-12, lacuna 23): lotes × rendimento. @example 36 */
   totalUnidades: number;
-  /** @example 13492.14 */
+  /** Com 2 casas. @example 13492.14 */
   custoTotal: number | null;
-  /** @example 374.78 */
+  /** Com 4 casas. @example 374.7817 */
   custoUnitario: number | null;
   /** @example '2026-11-19T12:00:00.000Z' */
   dataProducao: Date;
@@ -34,6 +35,7 @@ export class ProducaoDto {
 
 export type ProducaoComRateios = Producao & { rateios: RateioProducao[] };
 
+/** O banco guarda os valores sem arredondar; só a resposta arredonda (BE-23). */
 export function toProducaoDto(row: ProducaoComRateios): ProducaoDto {
   return {
     id: row.id,
@@ -41,13 +43,13 @@ export function toProducaoDto(row: ProducaoComRateios): ProducaoDto {
     empresaId: row.empresaId,
     quantidade: row.quantidade,
     totalUnidades: row.totalUnidades,
-    custoTotal: row.custoTotal,
-    custoUnitario: row.custoUnitario,
+    custoTotal: row.custoTotal == null ? null : round2(row.custoTotal),
+    custoUnitario: row.custoUnitario == null ? null : round4(row.custoUnitario),
     dataProducao: row.dataProducao,
     rateios: row.rateios.map((rateio) => ({
       gastoIndiretoId: rateio.gastoIndiretoId,
       descricao: rateio.descricao,
-      valorRateado: rateio.valorRateado,
+      valorRateado: round2(rateio.valorRateado),
     })),
   };
 }
