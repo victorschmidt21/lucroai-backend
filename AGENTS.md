@@ -148,7 +148,7 @@ Antes de dizer que terminou: `npm run lint && npm run format:check && npm run bu
 Política do produto inicial:
 
 - **Unitário** só das funções de `domain/` (fórmulas e regras) e da entidade `Venda`. Cada ramo de uma fórmula tem um caso, com os números conferidos nos microsserviços.
-- **E2E** só no teste de fumaça (`test/health.e2e-spec.ts`, BE-01) e no teste de contrato com o frontend (`test/contrato.e2e-spec.ts`, BE-15). O de contrato valida as respostas com a cópia dos schemas Zod do frontend em `test/contrato/`; rota nova ou mudança de resposta entra nele, e a cópia se atualiza como em [docs/api.md](docs/api.md#teste-de-contrato).
+- **E2E** só no teste de fumaça (`test/health.e2e-spec.ts`, BE-01), no teste de contrato com o frontend (`test/contrato.e2e-spec.ts`, BE-15) e na fumaça que uma issue pedir (`test/configuracao-custos.e2e-spec.ts`, BE-24). O de contrato valida as respostas com a cópia dos schemas Zod do frontend em `test/contrato/`; rota nova ou mudança de resposta entra nele, e a cópia se atualiza como em [docs/api.md](docs/api.md#teste-de-contrato).
 - **Não escreva** testes de controller, de repositório ou de service com mocks.
 - Sem meta de cobertura.
 - Teste extra só quando a issue pedir na seção "Testes".

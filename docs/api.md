@@ -65,6 +65,8 @@ Fórmulas e regras de cada rota estão em [business-rules.md](business-rules.md)
 | `vendas` | `GET /vendas/:id` | — | `Venda` | 200 | BE-13 |
 | `vendas` | `POST /vendas` | `{ itens: [{ receita_id, quantidade, preco_unitario_real }] }` | `Venda` | 201 | BE-13 |
 | `vendas` | `PATCH /vendas/:id/status` | `{ status }` | `Venda` | 200 | BE-13 |
+| `configuracao-custos` | `GET /configuracao-custos` (**nova**) | — | `ConfiguracaoCustos` | 200 | BE-24 |
+| `configuracao-custos` | `PUT /configuracao-custos` (**nova**) | `{ baseRateio?, capacidadeMensal?, lucroPadrao?, impostoPercentual?, taxaMaquininha? }` | `ConfiguracaoCustos` | 200 | BE-24 |
 
 Observações:
 
@@ -79,6 +81,7 @@ Observações:
 - `POST /producoes`: `receita_id` e `quantidade` (lotes) inteiros > 0; `gasto_indireto_ids` opcional, lista de inteiros > 0 (omitido rateia todos os gastos da empresa; `[]` não rateia nenhum; ids repetidos contam uma vez). Receita de outra empresa → 404 `RECEITA_NAO_ENCONTRADA`; gasto de outra empresa → 404 `GASTO_INDIRETO_NAO_ENCONTRADO`; produção de outra empresa no `GET /producoes/:id` → 404 `PRODUCAO_NAO_ENCONTRADA`. Saldo de insumo insuficiente não bloqueia (lacuna 10).
 - `GET /vendas`: `status` do enum `StatusVenda`; `dataInicio` e `dataFim` em ISO 8601 com data e hora (a web envia o início e o fim do dia local), comparados como instantes (`dataVenda ≥ dataInicio` e `≤ dataFim`). Qualquer filtro inválido → 400 `DADOS_INVALIDOS`; só a data (`2026-11-19`) ou data sem fuso também. Venda de outra empresa no `GET /vendas/:id` e no `PATCH` → 404 `VENDA_NAO_ENCONTRADA`.
 - `POST /vendas`: `itens` não vazio; `receita_id` e `quantidade` inteiros > 0; `preco_unitario_real` > 0 com até 2 casas. Receita de outra empresa → 404 `RECEITA_NAO_ENCONTRADA`. Não confere o estoque.
+- `PUT /configuracao-custos` (BE-24): campos em `camelCase`, todos opcionais (omitido mantém o valor salvo); `baseRateio` do enum `BaseRateio`; números finitos. Depois de mesclar com o salvo, `capacidadeMensal` precisa ser > 0 e `lucroPadrao`, `impostoPercentual` e `taxaMaquininha` entre 0 e 1 (frações do preço); fora disso → 400 `DADOS_INVALIDOS` com um `details` por campo. A configuração é sempre a da empresa do token.
 - `PATCH /vendas/:id/status`: `status` do enum `StatusVenda`. Venda já `CONCLUIDA` ou `CANCELADA` → 422 `VENDA_FINALIZADA`; `PENDENTE` → `PENDENTE` → 422 `TRANSICAO_INVALIDA`; concluir sem saldo de produto acabado → 422 `ESTOQUE_INSUFICIENTE` e nada é gravado (a venda continua `PENDENTE`).
 
 ## Teste de contrato
@@ -117,6 +120,7 @@ Arquivo novo em `contracts/` entra na lista do `for`. Se o teste falhar depois d
 | `EstoqueProduto` (**novo**) | `receitaId`, `quantidadeDisponivel`, `dataAlteracao`; um por receita que já teve produção, em ordem de `receitaId` |
 | `Producao` | `id`, `receitaId`, `empresaId`, `quantidade` (lotes), `totalUnidades` (**novo**), `custoTotal` (`null`), `custoUnitario` (`null`), `dataProducao`, `rateios: [{ gastoIndiretoId (o id continua depois da exclusão do gasto), descricao (**novo**), valorRateado }]`. Na resposta, `custoTotal` e `custoUnitario` sempre vêm preenchidos |
 | `Venda` | `id`, `empresaId`, `total` (`null`), `status`, `dataVenda`, `itens: [{ id, vendaId, receitaId, quantidade, precoUnitarioReal, custoUnitario (`null`), margemRealizada (`null`) }]` |
+| `ConfiguracaoCustos` (**novo**, BE-24) | `empresaId`, `baseRateio` (`FORNADAS \| MINUTOS`), `capacidadeMensal`, `lucroPadrao`, `impostoPercentual`, `taxaMaquininha` (frações, sem arredondar) |
 | Login | `{ access_token }` |
 | Cadastro de empresa | `{ sub, email, nome, empresa: { id, nome, cnpj, segmento }, access_token }` |
 

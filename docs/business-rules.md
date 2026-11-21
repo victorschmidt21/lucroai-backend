@@ -39,6 +39,7 @@ Valores e quantidades são `Float` no banco (`double precision`) e `number` na A
 | `TipoMovimentacaoEstoque` | `ENTRADA`, `SAIDA` |
 | `OrigemMovimentacaoEstoque` | `COMPRA`, `PRODUCAO` |
 | `OrigemMovimentacaoProdutoAcabado` (**novo**, BE-05) | `PRODUCAO`, `VENDA` |
+| `BaseRateio` (**novo**, BE-24) | `FORNADAS`, `MINUTOS` |
 
 ## Multiempresa
 
@@ -49,7 +50,7 @@ Valores e quantidades são `Float` no banco (`double precision`) e `number` na A
 
 Origem: `auth-service/src/modules/auth/application/services/auth.service.ts` e `auth.module.ts`.
 
-- Cadastro (`POST /auth/empresa`) cria empresa e usuário na mesma transação. CNPJ já cadastrado → 409 `CNPJ_JA_CADASTRADO` "CNPJ já cadastrado"; e-mail já cadastrado → 409 `EMAIL_JA_CADASTRADO` "E-mail já cadastrado". Com os dois repetidos, vale o do CNPJ (a empresa é criada antes do usuário, como a ordem das conferências de hoje). A duplicidade é detectada pelo índice único do banco (`P2002`), o que também cobre dois cadastros simultâneos.
+- Cadastro (`POST /auth/empresa`) cria empresa, usuário e a [configuração de custos](#configuração-de-custos) padrão (BE-24) na mesma transação. CNPJ já cadastrado → 409 `CNPJ_JA_CADASTRADO` "CNPJ já cadastrado"; e-mail já cadastrado → 409 `EMAIL_JA_CADASTRADO` "E-mail já cadastrado". Com os dois repetidos, vale o do CNPJ (a empresa é criada antes do usuário, como a ordem das conferências de hoje). A duplicidade é detectada pelo índice único do banco (`P2002`), o que também cobre dois cadastros simultâneos.
 - **Muda (BE-06):** `cnpj` e `nome_usuario` são opcionais; sem valor, ficam `null` no banco e no payload.
 - Senha com `argon2` (hash no cadastro, `verify` no login). E-mail inexistente e senha errada dão a **mesma** resposta: 401 `CREDENCIAIS_INVALIDAS` "Credenciais inválidas". Com e-mail inexistente, o login confere a senha contra um hash fictício, para o tempo de resposta não revelar quais e-mails existem.
 - JWT HS256, validade de **4 h**, payload `{ sub, email, nome, empresa: { id, nome, cnpj, segmento } }`. O frontend lê esse payload: não mude os nomes.
@@ -75,6 +76,24 @@ custoUnitario = quantidadeBaseCusto > 0 ? valorPago / quantidadeBaseCusto : 0
 - `PATCH` aceita só `nome`, `quantidadeBaseCusto`, `unidade` e `valorPago`; campo omitido mantém o valor salvo. O saldo muda só pelo estoque.
 - Excluir o insumo leva junto o estoque e as movimentações dele (`CASCADE`). Usado em receita → 409 `INSUMO_EM_USO` "Insumo usado em receitas não pode ser excluído" (P2003 da FK `RESTRICT`, traduzido no `InsumoRepository`).
 - Para outros módulos, `InsumoService` exporta `buscarVariosDaEmpresa(ids, empresaId)` (BE-09): ignora ids repetidos e responde 404 `INSUMO_NAO_ENCONTRADO` se algum não existir ou for de outra empresa. Devolve os insumos como estão no banco, com o custo sem arredondar (BE-23).
+
+## Configuração de custos
+
+**Novo (BE-24).** Uma por empresa (tabela `configuracao_custos`, `empresa_id` único), com o que o cálculo novo do épico E7 precisa. Não existe nos microsserviços.
+
+| Campo | O que é | Padrão |
+| --- | --- | --- |
+| `baseRateio` | o que a capacidade conta: `FORNADAS` ou `MINUTOS` de forno | `FORNADAS` |
+| `capacidadeMensal` | fornadas (ou minutos de forno) que a empresa faz por mês | 40 |
+| `lucroPadrao` | lucro como fração do **preço de venda** | 0,15 |
+| `impostoPercentual` | imposto como fração do preço (informal ou MEI: 0; o DAS do MEI entra como gasto mensal) | 0 |
+| `taxaMaquininha` | taxa cobrada no balcão, fração do preço | 0 |
+
+- Os padrões servem para quem está começando e ainda não fatura. Ficam em `CONFIGURACAO_CUSTOS_PADRAO` (`configuracao-custos/domain/configuracao-custos.calculos.ts`) e são também os defaults das colunas.
+- A configuração nasce no cadastro da empresa (`ConfiguracaoCustosService.criarPadrao(empresaId, tx)`, chamado pelo `auth` na transação do cadastro), no seed (que a volta aos padrões) e, para as empresas que já existiam, na própria migration `criar_configuracao_custos`.
+- Validação (`validarConfiguracaoCustos`), feita depois de mesclar o `PUT` com os valores salvos: `capacidadeMensal > 0`; `lucroPadrao`, `impostoPercentual` e `taxaMaquininha` entre 0 e 1, inclusive. Erro → 400 `DADOS_INVALIDOS`, um `details` por campo, no formato do `ValidationPipe`.
+- Os valores são gravados e devolvidos como vieram, sem arredondar.
+- Sem pró-labore, regime tributário, anexo do Simples nem faturamento: decisão de simplicidade da BE-24. Como os campos entram no custo e no preço é das issues seguintes do E7 (BE-28).
 
 ## Gastos indiretos e rateio
 
