@@ -8,17 +8,26 @@ Cada fórmula vira uma função pura em `src/modules/<modulo>/domain/<modulo>.ca
 
 ## Arredondamento
 
-Os microsserviços arredondam com `Number(valor.toFixed(n))`. O monolito usa **a mesma implementação**, para os centavos baterem nos mesmos casos de borda do ponto flutuante (por exemplo, `(1.005).toFixed(2)` dá `'1.00'`). Não troque por `Math.round(valor * 100) / 100`.
+**Muda (BE-23): arredondar só na saída.** Os microsserviços arredondavam no meio da conta (cada item da receita com 2 casas antes da soma: 15 g × R$ 0,017 = R$ 0,255 virava R$ 0,26), e o erro crescia em produtos baratos com muitos itens. No monolito, toda a cadeia de custo e preço (custo do insumo, itens, custo invisível, custo de produção, custo unitário, preço sugerido, simulação, preço de venda, produção, margem e total da venda) é calculada **sem arredondamento intermediário**, e o banco guarda os valores exatos. Só a resposta da API arredonda, nos DTOs de saída (`to<Entidade>Dto`):
 
-| Função | Implementação | Uso |
-| --- | --- | --- |
-| `round2(v)` | `Number(v.toFixed(2))` | dinheiro, margem projetada da simulação |
-| `round4(v)` | `Number(v.toFixed(4))` | margem realizada da venda |
-| `round6(v)` | `Number(v.toFixed(6))` | quantidades de estoque e saldos |
+| Valor na resposta | Casas | Função | Campos |
+| --- | --- | --- | --- |
+| Custo por unidade-base do insumo | 6 | `round6` | `custoUnitario` e `precoUnitario` do insumo |
+| Custo unitário e preço | 4 | `round4` | `custoUnitario` e `precoSugerido` da receita, `custo_por_unidade`, `custo_total_unitario`, `preco_sugerido`, `lucro_por_unidade`, `custoUnitario` e `precoVenda` da simulação, `custoUnitario` da produção e do item de venda |
+| Totais em reais | 2 | `round2` | `custoCalculado` do item, `custoProducao`, `custo_invisivel`, `custo_total_producao`, `lucroEstimado`, `custoTotal` e `valorRateado` da produção, `total` da venda |
+| Frações (margens e percentuais) | 4 | `round4` | `margemProjetada` da simulação (eram 2 casas), `margemRealizada` da venda |
 
-As três ficam em `src/shared/domain/arredondamento.ts` (BE-08), com teste unitário.
+Exemplo (critério da BE-23): farinha 1 kg a R$ 3,00/kg, sal 0,02 kg a R$ 2,50/kg e fermento 15 g a R$ 0,017/g dão custo de ingredientes **R$ 3,305** (`custoIngredientes` de `calcularCustoReceita`), não R$ 3,31 da soma de itens arredondados. Com rendimento 50, o custo unitário é R$ 0,0661 (era R$ 0,07).
 
-Valores e quantidades são `Float` no banco (`double precision`) e `number` na API, como hoje (BE-05). Todo valor calculado é arredondado **antes** de gravar.
+- Valores digitados (`valorPago`, `valor` do gasto, `margem_lucro`, `preco_unitario_real`, quantidades) voltam como vieram.
+- Quantidades de estoque e saldos continuam com `round6` ao gravar (não são custo nem preço).
+- O break-even da simulação é `Math.ceil` de `round6(custo × volume / preço)`: o `round6` só tira o ruído do ponto flutuante (`0.1 × 3 / 0.1` dá `3.0000000000000004`, e o teto daria 4).
+- Os services exportados para outros módulos devolvem os valores **sem arredondar**, não o DTO de resposta: `InsumoService.buscarVariosDaEmpresa` devolve os insumos e `ReceitaService.buscarDaEmpresa`, a receita com os itens, como estão no banco.
+- Cálculo em `number` (`double`), sem biblioteca de decimal: com ~15 dígitos significativos, o erro do ponto flutuante fica muito abaixo das 4 ou 6 casas da resposta, e o arredondamento o elimina.
+
+As três funções ficam em `src/shared/domain/arredondamento.ts`, com teste unitário. **Muda (BE-23):** arredondam meio para cima, longe do zero, e passam o valor escalado por `toPrecision(15)` antes do `Math.round`, para o ruído do ponto flutuante não derrubar o meio (`round2(1.005)` dá `1.01`, e `round2(3 + 0.05 + 0.255)` dá `3.31`). O `Number(v.toFixed(n))` dos microsserviços dava `1` e `3.3`. Não troque por `toFixed` nem por `Math.round(v * 100) / 100`.
+
+Valores e quantidades são `Float` no banco (`double precision`) e `number` na API, como hoje (BE-05).
 
 ## Enumerações
 
@@ -55,7 +64,7 @@ Origem: `catalog-service/src/modules/insumos/domain/models/insumo.entity.ts` e `
 custoUnitario = quantidadeBaseCusto > 0 ? valorPago / quantidadeBaseCusto : 0
 ```
 
-- **Sem arredondamento** (`calcularCustoUnitario`, em `insumos/domain/insumos.calculos.ts`). O custo unitário guarda a divisão inteira, e quem o usa arredonda depois (o item da receita, por exemplo).
+- **Sem arredondamento** (`calcularCustoUnitario`, em `insumos/domain/insumos.calculos.ts`). O custo unitário guarda a divisão inteira, que entra no custo da receita. **Muda (BE-23):** a resposta mostra o custo com 6 casas (`round6`), como o Omie; hoje mostra a divisão inteira.
 - Recalculado sempre que `valorPago` ou `quantidadeBaseCusto` mudam.
 - `precoUnitario` na resposta é um alias de `custoUnitario` (`insumo.dto.ts`), mantido por compatibilidade.
 - Validação: `quantidadeBaseCusto ≥ 0.000001`, `valorPago ≥ 0` e `quantidadeDisponivelInicial ≥ 0` (opcional).
@@ -65,14 +74,14 @@ custoUnitario = quantidadeBaseCusto > 0 ? valorPago / quantidadeBaseCusto : 0
 - Listagem ordenada por nome (e por id no empate), sem paginação. Hoje a ordem é a do banco.
 - `PATCH` aceita só `nome`, `quantidadeBaseCusto`, `unidade` e `valorPago`; campo omitido mantém o valor salvo. O saldo muda só pelo estoque.
 - Excluir o insumo leva junto o estoque e as movimentações dele (`CASCADE`). Usado em receita → 409 `INSUMO_EM_USO` "Insumo usado em receitas não pode ser excluído" (P2003 da FK `RESTRICT`, traduzido no `InsumoRepository`).
-- Para outros módulos, `InsumoService` exporta `buscarVariosDaEmpresa(ids, empresaId)` (BE-09): ignora ids repetidos e responde 404 `INSUMO_NAO_ENCONTRADO` se algum não existir ou for de outra empresa.
+- Para outros módulos, `InsumoService` exporta `buscarVariosDaEmpresa(ids, empresaId)` (BE-09): ignora ids repetidos e responde 404 `INSUMO_NAO_ENCONTRADO` se algum não existir ou for de outra empresa. Devolve os insumos como estão no banco, com o custo sem arredondar (BE-23).
 
 ## Gastos indiretos e rateio
 
 Origem do cadastro: `catalog-service/src/modules/gastos-indiretos/` (`create-gasto-indireto.dto.ts`). Origem do rateio: `operations-service/src/modules/producoes/application/services/producao.service.ts` (`calcularValorRateado`) e `recipe-service/src/modules/custos/infra/providers/default-custo-invisivel-result.provider.ts`, que têm a mesma fórmula.
 
 - Descrição até 100 caracteres, `valor ≥ 0`, `metodo_rateio` obrigatório. **Muda (BE-08):** a descrição passa a ser obrigatória e aparada.
-- `valor` é gravado como veio, sem `round2`, como no catalog-service; o arredondamento acontece no rateio.
+- `valor` é gravado como veio, sem `round2`, como no catalog-service.
 - Listagem por `id` decrescente (o mais novo primeiro), como hoje. `PUT` com campos opcionais: campo omitido mantém o valor salvo.
 - Gasto de outra empresa ou inexistente → 404 `GASTO_INDIRETO_NAO_ENCONTRADO`.
 - Excluir um gasto não apaga os rateios das produções antigas: `rateio_producao.gasto_indireto_id` não tem FK e guarda o id, como nos microsserviços, e o rateio guarda a `descricao`. **Muda (BE-12):** a BE-05 previa `SET NULL`, mas o `gastoIndiretoId` nulo quebraria o schema do frontend (`z.number().int()`, que mostra "Gasto #id").
@@ -82,9 +91,11 @@ Rateio de um gasto para `lotes` lotes de uma receita com `totalUnidades = lotes 
 
 | Método | Valor rateado |
 | --- | --- |
-| `FIXO` | `round2(valor)` |
-| `PROPORCIONAL` | `round2(valor × lotes)` |
-| `POR_UNIDADE` | `round2(valor × totalUnidades)` |
+| `FIXO` | `valor` |
+| `PROPORCIONAL` | `valor × lotes` |
+| `POR_UNIDADE` | `valor × totalUnidades` |
+
+**Muda (BE-23):** sem o `round2` de hoje; o valor rateado entra no custo da receita e da produção sem arredondar.
 
 Método desconhecido cai no `FIXO` (o `default` do `switch`). Com o enum validado no DTO e no banco, isso não acontece no monolito: o `switch` é exaustivo sobre o tipo `MetodoRateio`, sem `default`.
 
@@ -97,15 +108,17 @@ Origem: `recipe-service/src/modules/custos/application/services/custo.service.ts
 Para `lotes` lotes (o cadastro e a edição usam `lotes = 1`):
 
 ```
-quantidadeItem   = item.quantidade × lotes
-custoCalculado   = round2(quantidadeItem × insumo.custoUnitario)        // por item
-custoBase        = round2(Σ custoCalculado)
-totalUnidades    = rendimento × lotes
-custoInvisivel   = round2(Σ calcularValorRateado(gasto, lotes, totalUnidades))   // TODOS os gastos da empresa
-custoProducao    = round2(custoBase + custoInvisivel)
-custoUnitario    = round2(custoProducao / totalUnidades)                // rendimento ≤ 0 → 400
-precoSugerido    = round2(custoUnitario × (1 + margem))                 // só se margem != null
+quantidadeItem    = item.quantidade × lotes
+custoCalculado    = quantidadeItem × insumo.custoUnitario                // por item
+custoIngredientes = Σ custoCalculado
+totalUnidades     = rendimento × lotes
+custoInvisivel    = Σ calcularValorRateado(gasto, lotes, totalUnidades)  // TODOS os gastos da empresa
+custoProducao     = custoIngredientes + custoInvisivel
+custoUnitario     = custoProducao / totalUnidades                       // rendimento ≤ 0 → 400
+precoSugerido     = custoUnitario × (1 + margem)                        // só se margem != null
 ```
+
+**Muda (BE-23):** hoje cada linha arredonda com `round2`; o monolito não arredonda no meio e grava os valores exatos. A resposta arredonda (`custoCalculado`, `custoProducao` e `custo_invisivel` com 2 casas; `custoUnitario` e `precoSugerido` com 4), ver [Arredondamento](#arredondamento).
 
 - **Custo invisível (lacuna 18, mantida na BE-09):** soma o rateio de **todos** os gastos indiretos da empresa, não só dos escolhidos. Com o Aluguel de R$ 1.800 `FIXO`, o custo de produção de toda receita sobe R$ 1.800. Mudar a regra pede uma issue própria, porque muda os números que o frontend mostra.
 - O resultado do custo invisível precisa ser finito e ≥ 0, senão 400 (`obterCustoInvisivel`). Com valores ≥ 0 validados no cadastro, isso não acontece, e o monolito não repete a conferência.
@@ -115,7 +128,7 @@ precoSugerido    = round2(custoUnitario × (1 + margem))                 // só 
 - O item guarda `custoCalculado` para 1 lote. A receita guarda `custoProducao`, `custoUnitario`, `margemLucro` e `precoSugerido`; sem valor, esses campos são **omitidos** na resposta.
 - Validação do corpo (`create-receita.dto.ts`): nome até 80, `rendimento` inteiro > 0, `quantidade` do item ≥ 0.001, `insumo_id` inteiro > 0. **Muda (BE-09):** a lista de insumos não pode ser vazia (400), os insumos precisam ser da empresa (404 `INSUMO_NAO_ENCONTRADO`), e o nome passa a ser aparado e obrigatório (como o do insumo e o do gasto).
 - Receita inexistente ou de outra empresa → 404 `RECEITA_NAO_ENCONTRADA` "Receita não encontrada". Listagem por `dataCriacao` decrescente (e `id` no empate); itens na ordem em que foram informados.
-- Para outros módulos, `ReceitaService` exporta `buscarDaEmpresa(id, empresaId, tx?)`, que devolve a `Receita` com os itens (404 se não for da empresa), para as BE-12 e BE-13.
+- Para outros módulos, `ReceitaService` exporta `buscarDaEmpresa(id, empresaId, tx?)`, que devolve a `Receita` com os itens (404 se não for da empresa), para as BE-12 e BE-13. São os valores do banco, sem arredondar (BE-23), e não o `ReceitaDto`.
 
 ### Edição
 
@@ -142,7 +155,7 @@ Origem: `custo.service.ts` (`calcularPorReceita`, `simularPorReceita`) e `custos
 | `custo_total_producao` | `custoProducao` |
 | `custo_por_unidade` | `custoUnitario` |
 
-- A quantidade do item é multiplicada pelos lotes **antes** do `round2` do item, como hoje: o fermento do Pão Francês dá 0,26 em 1 lote e 0,77 (não 0,78) em 3.
+- A quantidade do item é multiplicada pelos lotes antes do custo do item, como hoje. Sem o `round2` do item (BE-23), o fermento do Pão Francês custa 0,255 em 1 lote e 0,765 em 3.
 - `quantidadeLotes` inteiro > 0 (400 senão). `GET` responde 200 e o `POST` 201. Receita de outra empresa → 404. Não grava nada.
 - Service: `ReceitaService.calcularCusto(id, lotes, empresaId)`; resposta montada por `toReceitaCustoDto`.
 
@@ -155,16 +168,17 @@ custo        = novoCusto ?? receita.custoUnitario        // salvo; ausente → 4
 preco        = novoPreco ?? receita.precoSugerido        // salvo; ausente → 400
 volume       = volume ?? receita.rendimento
 margemUnit   = preco − custo
-lucroEstimado   = round2(margemUnit × volume)
-margemProjetada = round2(margemUnit / preco)             // fração, com 2 casas
-breakEven       = Math.ceil((custo × volume) / preco)     // unidades, sem arredondar a entrada
-resposta     = { custoUnitario: round2(custo), precoVenda: round2(preco), volume, lucroEstimado, margemProjetada, breakEven }
+lucroEstimado   = margemUnit × volume
+margemProjetada = margemUnit / preco                     // fração
+breakEven       = Math.ceil(round6((custo × volume) / preco))   // unidades; o round6 só tira o ruído do ponto flutuante
+resposta     = { custoUnitario: round4(custo), precoVenda: round4(preco), volume, lucroEstimado: round2(…), margemProjetada: round4(…), breakEven }
 ```
 
 - Mensagens atuais (400): "Receita sem custo calculado. Informe novoCusto para simular." (`RECEITA_SEM_CUSTO`) e "Receita sem preço sugerido definido. Informe novoPreco para simular." (`RECEITA_SEM_PRECO`).
 - `novoCusto` e `novoPreco` > 0 e `volume` inteiro > 0, quando informados.
 - **Muda (BE-10, lacuna 27):** preço igual a 0 (só acontece com o `precoSugerido` salvo igual a 0) → 400 `PRECO_INVALIDO` "Preço de venda deve ser maior que zero. Informe novoPreco para simular.", em vez de devolver `NaN`.
-- Função pura `simularCenario(entrada, receita)`; não grava nada. Responde 201.
+- **Muda (BE-23):** custo e preço com 4 casas (eram 2) e `margemProjetada` com 4 casas (eram 2); o arredondamento fica no `toSimulacaoCenarioDto`.
+- Função pura `simularCenario(entrada, receita)`, sem arredondar; não grava nada. Responde 201.
 
 ### Preço de venda
 
@@ -172,13 +186,13 @@ Origem: `receita.service.ts` (`calcularPrecoVenda`) e `receitas/application/dto/
 
 ```
 custo                = receita.custoUnitario      // salvo; ausente → 400 RECEITA_SEM_CUSTO "Receita sem custo calculado"
-preco_sugerido       = round2(custo × (1 + margem_lucro))
-lucro_por_unidade    = round2(preco_sugerido − custo)
-custo_total_unitario = custo
+preco_sugerido       = custo × (1 + margem_lucro)
+lucro_por_unidade    = preco_sugerido − custo
+custo_total_unitario = custo                      // os três com round4 na resposta (BE-23)
 ```
 
 - `margem_lucro ≥ 0`. Não grava nada na receita.
-- **Muda (BE-10, lacuna 20):** hoje não há arredondamento (`72.11200000000001`); o monolito aplica `round2` em `preco_sugerido` e `lucro_por_unidade` (este calculado com o preço já arredondado; com o seed, o resultado é igual ao `round2` do valor de hoje).
+- **Muda (BE-10, lacuna 20):** hoje não há arredondamento (`72.11200000000001`). **Muda (BE-23):** o cálculo não arredonda, e a resposta mostra os três campos com 4 casas (`72.112`); a BE-10 aplicava `round2` no meio da conta.
 - Função pura `calcularPrecoVenda(custoUnitario, margem)`. Responde 201.
 
 ## Estoque de insumos
@@ -210,9 +224,11 @@ gastos          = gasto_indireto_ids omitido → todos os gastos da empresa
 totalUnidades   = quantidade × receita.rendimento
 custoBase       = receita.custoProducao × quantidade        // custo SALVO da receita (0 se ausente), sem arredondar
 rateios         = gastos.map(g => calcularValorRateado(g, quantidade, totalUnidades))
-custoTotal      = round2(custoBase + Σ rateios)
-custoUnitario   = totalUnidades > 0 ? round2(custoTotal / totalUnidades) : 0
+custoTotal      = custoBase + Σ rateios
+custoUnitario   = totalUnidades > 0 ? custoTotal / totalUnidades : 0
 ```
+
+**Muda (BE-23):** sem o `round2` de hoje; a produção grava os valores exatos e a resposta mostra `custoTotal` e `valorRateado` com 2 casas e `custoUnitario` com 4.
 
 - `quantidade` é o número de **lotes** (inteiro > 0).
 - O `custoProducao` salvo da receita já contém o custo invisível de 1 lote com todos os gastos (lacuna 18). Por isso os gastos rateados na produção entram **de novo** no `custoTotal`. É o comportamento atual e fica mantido junto com a lacuna 18.
@@ -243,10 +259,12 @@ Origem: `sales-service/src/modules/vendas/application/services/venda.service.ts`
 
 ```
 custoUnitario    = receita.custoUnitario                        // snapshot do valor SALVO na hora da venda
-margemRealizada  = custoUnitario != null ? round4((preco − custoUnitario) / preco) : null
-total            = round2(Σ quantidade × preco)
+margemRealizada  = custoUnitario != null ? (preco − custoUnitario) / preco : null
+total            = Σ quantidade × preco
 status inicial   = PENDENTE
 ```
+
+**Muda (BE-23):** a venda grava os valores exatos (inclusive o `custoUnitario` exato da receita); a resposta mostra `total` com 2 casas e `custoUnitario` e `margemRealizada` com 4.
 
 - Item: `receita_id` inteiro > 0, `quantidade` inteiro > 0, `preco_unitario_real` > 0 com até 2 casas.
 - Receita sem `custoUnitario` salvo → `custoUnitario` e `margemRealizada` do item ficam `null` (a venda é registrada mesmo assim). A margem pode ser negativa (preço abaixo do custo).
@@ -283,7 +301,7 @@ A lista numerada está em [`lucroai-frontend/docs/api-integration.md#lacunas-do-
 | 17 | seeds com `EMPRESA_ID = 1` fixo | corrigida | BE-14 | um seed só, pelos ids reais |
 | 18 | custo invisível soma todos os gastos da empresa | mantida | BE-09 | muda os números que o frontend mostra; o seed passa a gravar com a mesma regra (BE-14), então seed e API batem |
 | 19 | `GET /estoque/insumos/:id` de insumo inexistente → 404 | mantida | BE-11 | é o comportamento certo (inexistente ou de outra empresa) |
-| 20 | preço de venda sem arredondamento | corrigida | BE-10 | `round2` |
+| 20 | preço de venda sem arredondamento | corrigida | BE-10, BE-23 | 4 casas na resposta (`round4`); a BE-10 usava `round2` |
 | 21 | `PUT /receitas/:id` não remove a margem | corrigida | BE-09 | `margem_lucro: null` limpa margem e preço sugerido |
 | 22 | entrada de estoque sem `observacao` | corrigida | BE-05, BE-11 | campo opcional gravado na movimentação |
 | 23 | produção sem total de unidades | corrigida | BE-05, BE-12 | `totalUnidades` gravado |

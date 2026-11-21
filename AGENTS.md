@@ -68,7 +68,7 @@ Antes de dizer que terminou: `npm run lint && npm run format:check && npm run bu
 6. **Um módulo só usa de outro os services exportados** (e as funções puras de `domain/<modulo>.calculos.ts` de um módulo do qual depende). Nada de importar `application/` ou `infra/` de outro módulo, nem criar dependência circular.
 7. **Transação entre módulos** com `TransactionManager.run()`, passando o `tx` como último parâmetro aos services e repositórios.
 8. **O contrato do frontend é intocável**: mesmas rotas, sem `/v1`, sem envelope, sem paginação, mesmos nomes de campo (inclusive `snake_case`), mesmo `null` × omitido. Campo novo só aditivo ([docs/api.md](docs/api.md)).
-9. **Os números precisam bater com os dos microsserviços**: use as fórmulas e o `round2`/`round4`/`round6` de [docs/business-rules.md](docs/business-rules.md). Só mude um cálculo quando uma issue corrigir uma lacuna, e registre no `business-rules.md`.
+9. **Os números precisam bater com os dos microsserviços**: use as fórmulas de [docs/business-rules.md](docs/business-rules.md). Só mude um cálculo quando uma issue corrigir uma lacuna, e registre no `business-rules.md`. **Arredonde só na resposta** (BE-23): as funções de `domain/` não arredondam valores de custo e preço; os DTOs de saída usam `round2`/`round4`/`round6` ([Arredondamento](docs/business-rules.md#arredondamento)).
 10. **Erros de negócio usam as classes de `src/shared/domain/errors/domain.error.ts`** (`InvalidInputError`, `UnauthorizedError`, `ForbiddenError`, `NotFoundError`, `ConflictError`, `BusinessRuleError`), com `code` em `UPPER_SNAKE_CASE` e mensagem em português. Não lance `HttpException` em `domain/` nem em `application/`.
 11. **A empresa vem sempre do token.** Todo acesso filtra por `empresaId`; recurso de outra empresa responde 404.
 12. **DTOs com `class-validator`**, documentados pelo CLI plugin do Swagger (JSDoc com `@example`). Sem `@ApiProperty` e sem decorators de Swagger próprios.
@@ -105,7 +105,7 @@ Antes de dizer que terminou: `npm run lint && npm run format:check && npm run bu
 | `infra/http/` | `AllExceptionsFilter` (formato único de erro), `ErrorResponseDto` e `validationExceptionFactory` (400 `DADOS_INVALIDOS` com `details` por campo), registrados em `app.setup.ts` |
 | `infra/auth/` | `JwtAuthModule` (global: `JwtService` HS256 com 4 h e `JwtAuthGuard` como guard global), `@Public()`, `@CurrentUser()` e o tipo `UsuarioAutenticado` (`{ sub, email, nome, empresa: { id, nome, cnpj, segmento } }`) |
 | `infra/health/` | `GET /health` (pública), com `SELECT 1` no banco |
-| `domain/arredondamento.ts` | `round2`, `round4` e `round6` (`Number(v.toFixed(n))`, [business-rules.md](docs/business-rules.md#arredondamento)) |
+| `domain/arredondamento.ts` | `round2`, `round4` e `round6` (meio para cima, sem o ruído do ponto flutuante; só nos DTOs de saída, BE-23, [business-rules.md](docs/business-rules.md#arredondamento)) |
 
 ## Convenções
 
@@ -127,7 +127,7 @@ Antes de dizer que terminou: `npm run lint && npm run format:check && npm run bu
 
 - Sem `any`; use `unknown` e refine. `import type` para o que é só tipo.
 - Comente o **porquê** de decisões não evidentes (ex.: uma regra mantida por compatibilidade com uma lacuna).
-- Dinheiro e quantidade são `number` (`Float` no banco), arredondados com as funções de `domain/arredondamento.ts` antes de gravar.
+- Dinheiro e quantidade são `number` (`Float` no banco). Custo e preço são gravados sem arredondar e arredondados só na resposta, com as funções de `domain/arredondamento.ts`; saldos de estoque levam `round6` ao gravar.
 - Formatação é do Prettier (aspas simples, vírgula final): rode `npm run format`.
 
 **Commits** em [Conventional Commits](https://www.conventionalcommits.org/), em português: `<tipo>(<escopo>): <descrição>`, com tipo `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `ci` ou `perf`, escopo opcional (módulo ou área: `receitas`, `prisma`, `shared`) e descrição no presente, com inicial minúscula e sem ponto final. Ex.: `feat(receitas): calcula o custo da receita`. Commits pequenos, e cada um compila.

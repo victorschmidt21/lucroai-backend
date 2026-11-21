@@ -116,7 +116,7 @@ Só o módulo `vendas` tem também `domain/venda.entity.ts` (e o `venda.entity.s
 
 - Um por entidade principal (`GastoIndiretoService`).
 - CRUD com nomes em inglês (`list`, `findById`, `create`, `update`, `delete`); ações e métodos para outros módulos em português (`concluir`, `buscarVariosDaEmpresa`, `baixarPorProducao`).
-- Recebe DTOs validados e o `empresaId` do token, e devolve DTOs de saída. Nunca devolve o registro do Prisma.
+- Recebe DTOs validados e o `empresaId` do token, e devolve DTOs de saída. Nunca devolve o registro do Prisma para o controller. **Exceção (BE-23):** um método para outro módulo cujos valores entram em outra conta devolve o registro, sem o arredondamento do DTO de saída (`InsumoService.buscarVariosDaEmpresa`, `ReceitaService.buscarDaEmpresa`).
 - Lança só os erros de `src/shared/domain/errors/domain.error.ts`.
 - Abre transação com `TransactionManager.run()` quando grava em mais de uma tabela ou em mais de um módulo.
 
@@ -172,7 +172,7 @@ Qualquer exceção → AllExceptionsFilter → { statusCode, code, message, deta
 ## Banco
 
 - Um schema só, `prisma/schema.prisma` (BE-05), com chaves estrangeiras reais entre as tabelas. Nomes de tabela e coluna em `snake_case` com `@@map`/`@map`, iguais aos dos microsserviços; models em `PascalCase` singular e campos em `camelCase`.
-- Ids `Int @default(autoincrement())`; valores e quantidades `Float`, arredondados antes de gravar ([business-rules.md](business-rules.md#arredondamento)).
+- Ids `Int @default(autoincrement())`; valores e quantidades `Float`. Custo e preço são gravados sem arredondar e arredondados só nos DTOs de resposta (BE-23, [business-rules.md](business-rules.md#arredondamento)).
 - `empresa_id` em toda tabela de negócio, com índice.
 - Migration nova: `npm run db:migrate -- --name <verbo>_<descricao>`. Nunca edite uma migration já mergeada nem `src/generated/`.
 - Transações: `TransactionManager.run(async (tx) => ...)` em `src/shared/infra/database/transaction.manager.ts`, injetável em qualquer service (o `PrismaModule` é global e o exporta). O tipo do `tx` é `PrismaTransaction` (`prisma.transaction.ts`).
@@ -184,8 +184,6 @@ Qualquer exceção → AllExceptionsFilter → { statusCode, code, message, deta
 ### `domain/gastos-indiretos.calculos.ts`
 
 ```ts
-import { round2 } from '../../../shared/domain/arredondamento.js';
-
 export type MetodoRateio = 'FIXO' | 'PROPORCIONAL' | 'POR_UNIDADE';
 
 export interface GastoParaRateio {
@@ -196,6 +194,7 @@ export interface GastoParaRateio {
 /**
  * Valor de um gasto rateado para `lotes` lotes que rendem `totalUnidades`.
  * Origem: producao.service.ts (calcularValorRateado) do operations-service.
+ * Sem arredondamento (BE-23): o valor entra no custo da receita e da produção.
  */
 export function calcularValorRateado(
   gasto: GastoParaRateio,
@@ -204,11 +203,11 @@ export function calcularValorRateado(
 ): number {
   switch (gasto.metodoRateio) {
     case 'FIXO':
-      return round2(gasto.valor);
+      return gasto.valor;
     case 'PROPORCIONAL':
-      return round2(gasto.valor * lotes);
+      return gasto.valor * lotes;
     case 'POR_UNIDADE':
-      return round2(gasto.valor * totalUnidades);
+      return gasto.valor * totalUnidades;
   }
 }
 ```
@@ -228,9 +227,8 @@ describe('calcularValorRateado', () => {
     expect(calcularValorRateado({ valor: 12.5, metodoRateio: 'PROPORCIONAL' }, 3, 150)).toBe(37.5);
   });
 
-  it('POR_UNIDADE multiplica pelo total de unidades, com o round2 de toFixed', () => {
-    // 0.015 × 101 = 1.515 no ponto flutuante, e toFixed(2) dá '1.51'
-    expect(calcularValorRateado({ valor: 0.015, metodoRateio: 'POR_UNIDADE' }, 1, 101)).toBe(1.51);
+  it('POR_UNIDADE multiplica pelo total de unidades, sem arredondar', () => {
+    expect(calcularValorRateado({ valor: 0.015, metodoRateio: 'POR_UNIDADE' }, 1, 101)).toBeCloseTo(1.515, 12);
   });
 });
 ```

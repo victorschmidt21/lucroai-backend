@@ -18,7 +18,7 @@ Fórmulas e regras de cada rota estão em [business-rules.md](business-rules.md)
 | `POST` de criação | 201. `POST` de ação ou cálculo (`/auth/login`, `/simular`, `/preco-venda`, `/entrada`) segue o status de hoje, conferido na coluna "Sucesso". |
 | Ids | inteiros (`autoincrement`). Parâmetro de rota inválido → 400 (`ParseIntPipe`). |
 | Datas | ISO 8601 em UTC (`2026-06-01T07:00:00.000Z`). |
-| Dinheiro e quantidade | `number`, já arredondado pelo backend ([business-rules.md](business-rules.md#arredondamento)). |
+| Dinheiro e quantidade | `number`, já arredondado pelo backend na resposta: 6 casas no custo do insumo, 4 no custo unitário, preço e frações, 2 nos totais em reais (BE-23, [business-rules.md](business-rules.md#arredondamento)). |
 | Margem | fração (`0.6` = 60%). |
 | Campo sem valor | **omitido** ou **`null`**, conforme o recurso (ver [Respostas](#respostas)). Não troque um pelo outro: os schemas do frontend distinguem `.optional()` de `.nullable()`. |
 | Empresa | vem do token. O cliente nunca envia `empresaId`. Recurso de outra empresa → 404. |
