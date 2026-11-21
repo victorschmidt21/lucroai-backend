@@ -50,6 +50,12 @@ enum OrigemMovimentacaoProdutoAcabado {
   VENDA
 }
 
+/// Unidade da capacidade mensal da empresa (BE-24): fornadas ou minutos de forno.
+enum BaseRateio {
+  FORNADAS
+  MINUTOS
+}
+
 // ---------- auth ----------
 
 model Empresa {
@@ -69,6 +75,7 @@ model Empresa {
   movimentacoesProdutoAcabado MovimentacaoProdutoAcabado[]
   producoes                   Producao[]
   vendas                      Venda[]
+  configuracaoCustos          ConfiguracaoCustos?
 
   @@map("empresa")
 }
@@ -122,6 +129,24 @@ model GastoIndireto {
 
   @@index([empresaId])
   @@map("gasto_indireto")
+}
+
+// ---------- configuracao-custos ----------
+
+/// Configuração de custos da empresa (BE-24): uma por empresa, criada com os
+/// padrões no cadastro. As frações são do preço de venda (0 a 1).
+model ConfiguracaoCustos {
+  id                Int        @id @default(autoincrement())
+  empresaId         Int        @unique @map("empresa_id")
+  baseRateio        BaseRateio @default(FORNADAS) @map("base_rateio")
+  capacidadeMensal  Float      @default(40) @map("capacidade_mensal")
+  lucroPadrao       Float      @default(0.15) @map("lucro_padrao")
+  impostoPercentual Float      @default(0) @map("imposto_percentual")
+  taxaMaquininha    Float      @default(0) @map("taxa_maquininha")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+
+  @@map("configuracao_custos")
 }
 
 // ---------- receitas ----------
