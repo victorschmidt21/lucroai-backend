@@ -25,6 +25,7 @@ import {
   calcularSaidaProdutoAcabado,
   calcularSaldoAposMovimentacao,
 } from '../src/modules/estoque/domain/estoque.calculos.js';
+import { CONFIGURACAO_CUSTOS_PADRAO } from '../src/modules/configuracao-custos/domain/configuracao-custos.calculos.js';
 import { calcularCustoUnitario } from '../src/modules/insumos/domain/insumos.calculos.js';
 import { calcularProducao } from '../src/modules/producoes/domain/producoes.calculos.js';
 import { calcularCustoReceita } from '../src/modules/receitas/domain/receitas.calculos.js';
@@ -375,6 +376,13 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
   });
   const empresaId = empresa.id;
   await limparEmpresa(tx, empresaId);
+
+  // Configuração de custos com os padrões (BE-24); volta a eles a cada seed.
+  await tx.configuracaoCustos.upsert({
+    where: { empresaId },
+    create: { ...CONFIGURACAO_CUSTOS_PADRAO, empresaId },
+    update: { ...CONFIGURACAO_CUSTOS_PADRAO },
+  });
 
   for (const usuario of USUARIOS) {
     const dados = { ...usuario, empresaId, senha: senhaHash };
