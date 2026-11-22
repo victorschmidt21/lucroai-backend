@@ -9,6 +9,7 @@ import { calcularCustoReposicao } from '../../../insumos/domain/insumos.calculos
 import {
   type BasePreco,
   calcularCustoReceita,
+  calcularPercentuaisSemLucro,
   calcularPrecoNoCanal,
   calcularPrecoVenda,
   type CustoReceita,
@@ -16,6 +17,7 @@ import {
   lucroPercentualInformado,
   resolverFichaTecnica,
   simularCenario,
+  somarGastosMensais,
   somarGastosPercentuais,
   validarFichaTecnica,
 } from '../../domain/receitas.calculos.js';
@@ -178,22 +180,32 @@ export class ReceitaService {
     return toReceitaCustoDto(this.calcular(receita, contexto, lotes));
   }
 
-  /** Simulação de cenário com o custo e o preço atuais como padrão. Não grava nada. */
+  /**
+   * Simulação com o preço praticado, o canal (Balcão se omitido; 404 se for
+   * de outra empresa) e o volume do mês (BE-31). O padrão do preço é o
+   * sugerido no canal. Não grava nada.
+   */
   async simular(
     id: number,
     dto: SimularCenarioDto,
     empresaId: number,
   ): Promise<SimulacaoCenarioDto> {
     const receita = await this.getOrFail(id, empresaId);
+    const canal = await this.canalVendaService.buscarParaVenda(
+      dto.canalId,
+      empresaId,
+    );
     const contexto = await this.contextoDe(receita, empresaId);
     const custo = this.calcular(receita, contexto);
-    return toSimulacaoCenarioDto(
-      simularCenario(dto, {
-        custoUnitario: custo.custoUnitario,
-        precoSugerido: this.precoSugerido(receita, custo, contexto),
-        rendimento: receita.rendimento,
-      }),
-    );
+    const base = this.basePreco(receita, contexto);
+    const cenario = simularCenario(dto, {
+      custo: custo.detalhe,
+      precoNoCanal: calcularPrecoNoCanal(custo.detalhe, canal, base).preco,
+      rendimento: receita.rendimento,
+      percentuaisSemLucro: calcularPercentuaisSemLucro(canal, base),
+      gastosMensais: somarGastosMensais(contexto.gastos),
+    });
+    return toSimulacaoCenarioDto(cenario, canal);
   }
 
   /** Preço de venda para a margem informada, com o custo atual. Não grava nada. */

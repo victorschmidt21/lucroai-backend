@@ -179,6 +179,13 @@ export function somarGastosMensaisLote(
     );
 }
 
+/** Soma dos gastos `MENSAL`: os gastos do mês inteiro (BE-31). */
+export function somarGastosMensais(gastos: GastoParaCusto[]): number {
+  return gastos
+    .filter((gasto) => gasto.tipo === 'MENSAL')
+    .reduce((total, gasto) => total + gasto.valor, 0);
+}
+
 /** Soma dos gastos `POR_UNIDADE` (reais por unidade, BE-28). */
 export function somarGastosPorUnidade(gastos: GastoParaCusto[]): number {
   return gastos
@@ -222,6 +229,12 @@ export interface CustoUnitarioDetalhado {
   /** O que a perda acrescenta: `custoUnitario − custo sem perda`. */
   perdas: number;
   custoUnitario: number;
+  /**
+   * O custo variável (BE-31): `custoUnitario` sem a parte dos gastos
+   * `MENSAL`, `(ingredientes + embalagem + gastosPorUnidade) ÷ (1 − perda)`.
+   * É o que a margem de contribuição desconta.
+   */
+  custoSemGastosMensais: number;
 }
 
 /**
@@ -240,6 +253,9 @@ export function calcularCustoUnitario(
     input.embalagemPorUnidade +
     input.gastosPorUnidade;
   const custoUnitario = semPerda / (1 - input.perdaPercentual);
+  const custoSemGastosMensais =
+    (ingredientes + input.embalagemPorUnidade + input.gastosPorUnidade) /
+    (1 - input.perdaPercentual);
   return {
     ingredientesLote: input.ingredientesLote,
     gastosMensaisLote: input.gastosMensaisLote,
@@ -249,6 +265,7 @@ export function calcularCustoUnitario(
     embalagem: input.embalagemPorUnidade,
     perdas: custoUnitario - semPerda,
     custoUnitario,
+    custoSemGastosMensais,
   };
 }
 
@@ -523,47 +540,109 @@ export function calcularCustoReceita(input: CustoReceitaInput): CustoReceita {
   };
 }
 
+/**
+ * Margem de contribuição por unidade (BE-31), sem os gastos mensais:
+ * `preço − custoSemGastosMensais − percentuaisSemLucro × preço`. É o que cada
+ * unidade vendida deixa para pagar os gastos do mês. Sem arredondar.
+ */
+export function calcularMargemContribuicao(
+  preco: number,
+  custoSemGastosMensais: number,
+  percentuaisSemLucro: number,
+): number {
+  return preco - custoSemGastosMensais - percentuaisSemLucro * preco;
+}
+
+export const MOTIVO_MARGEM_NEGATIVA = 'MARGEM_NEGATIVA';
+export const MOTIVO_SEM_VENDAS = 'SEM_VENDAS';
+export type MotivoSemPontoEquilibrio =
+  typeof MOTIVO_MARGEM_NEGATIVA | typeof MOTIVO_SEM_VENDAS;
+
+export type PontoEquilibrioProduto =
+  | { unidades: number; motivo: null }
+  | { unidades: null; motivo: typeof MOTIVO_MARGEM_NEGATIVA };
+
+/**
+ * Ponto de equilíbrio do produto (BE-31): `gastosMensais ÷ MCu`, em unidades
+ * inteiras por mês, "se só vendesse este produto". Com `MCu ≤ 0` nenhuma
+ * quantidade paga os gastos: `null` com motivo `MARGEM_NEGATIVA`. O `round6`
+ * tira o ruído do ponto flutuante antes do teto e da comparação com 0.
+ */
+export function calcularPontoEquilibrioProduto(
+  gastosMensais: number,
+  margemContribuicao: number,
+): PontoEquilibrioProduto {
+  if (round6(margemContribuicao) <= 0) {
+    return { unidades: null, motivo: MOTIVO_MARGEM_NEGATIVA };
+  }
+  return {
+    unidades: Math.ceil(round6(gastosMensais / margemContribuicao)),
+    motivo: null,
+  };
+}
+
 export interface SimulacaoEntrada {
   novoCusto?: number;
+  /** Preço praticado. */
   novoPreco?: number;
+  /** Unidades vendidas no mês. */
   volume?: number;
 }
 
-/** Valores da receita (calculados na leitura) usados quando a simulação não os informa. */
+/** O que a simulação usa da receita, do canal e da empresa (calculado na leitura). */
 export interface ReceitaParaSimulacao {
-  custoUnitario: number | null;
-  precoSugerido: number | null;
+  /** Custo de 1 unidade (com o custo de reposição dos insumos). */
+  custo: Pick<
+    CustoUnitarioDetalhado,
+    'custoUnitario' | 'custoSemGastosMensais'
+  >;
+  /** Preço sugerido no canal simulado; `null` sem preço possível. */
+  precoNoCanal: number | null;
   rendimento: number;
+  /** `calcularPercentuaisSemLucro` do canal simulado. */
+  percentuaisSemLucro: number;
+  /** `somarGastosMensais` da empresa. */
+  gastosMensais: number;
 }
 
 export interface SimulacaoCenario {
   custoUnitario: number;
+  custoSemGastosMensais: number;
   precoVenda: number;
   volume: number;
-  lucroEstimado: number;
-  /** Fração (pode ser negativa). */
-  margemProjetada: number;
-  /** Unidades para cobrir o custo do volume. */
+  percentuaisSemLucro: number;
+  /** MCu, em reais por unidade. */
+  margemContribuicao: number;
+  /** `preço − custoUnitario − percentuaisSemLucro × preço`. */
+  lucroPorUnidade: number;
+  /** `lucroPorUnidade ÷ preço`, fração do preço (pode ser negativa). */
+  lucroReal: number;
+  /** `lucroPorUnidade × volume`. */
+  lucroMes: number;
+  gastosMensais: number;
+  pontoEquilibrio: PontoEquilibrioProduto;
+  /**
+   * Legado: `ceil(custo × volume ÷ preço)`, que não diz quanto vender para
+   * pagar o mês. Fica só porque o schema atual do frontend o exige; sai com
+   * a BE-33.
+   */
   breakEven: number;
 }
 
 /**
- * Simulação de cenário. Origem: `simular` do `simulacao.service.ts`
- * (recipe-service), com as mesmas mensagens. Preço 0 → 400 `PRECO_INVALIDO`
- * em vez de `NaN` (lacuna 27). Sem arredondar (BE-23), menos o break-even.
+ * **Muda (BE-31):** simulação com o preço praticado, o canal e o volume do
+ * mês. O lucro desconta o imposto, a taxa do canal e os gastos
+ * `PERCENTUAL_VENDA`: pelo preço sugerido do canal, o `lucroReal` é o lucro
+ * configurado. Origem das mensagens: `simulacao.service.ts` (recipe-service).
+ * Preço 0 → 400 `PRECO_INVALIDO` (lacuna 27). `novoCusto` troca o custo
+ * unitário; o custo variável perde a mesma parte dos gastos mensais da
+ * receita (nunca abaixo de 0). Sem arredondar (BE-23), menos as unidades.
  */
 export function simularCenario(
   entrada: SimulacaoEntrada,
   receita: ReceitaParaSimulacao,
 ): SimulacaoCenario {
-  const custo = entrada.novoCusto ?? receita.custoUnitario;
-  if (custo == null) {
-    throw new InvalidInputError(
-      'RECEITA_SEM_CUSTO',
-      'Receita sem custo calculado. Informe novoCusto para simular.',
-    );
-  }
-  const preco = entrada.novoPreco ?? receita.precoSugerido;
+  const preco = entrada.novoPreco ?? receita.precoNoCanal;
   if (preco == null) {
     throw new InvalidInputError(
       'RECEITA_SEM_PRECO',
@@ -576,17 +655,38 @@ export function simularCenario(
       'Preço de venda deve ser maior que zero. Informe novoPreco para simular.',
     );
   }
+  const parteMensal =
+    receita.custo.custoUnitario - receita.custo.custoSemGastosMensais;
+  const custoUnitario = entrada.novoCusto ?? receita.custo.custoUnitario;
+  const custoSemGastosMensais =
+    entrada.novoCusto === undefined
+      ? receita.custo.custoSemGastosMensais
+      : Math.max(0, entrada.novoCusto - parteMensal);
   const volume = entrada.volume ?? receita.rendimento;
-  const margemPorUnidade = preco - custo;
+  const margemContribuicao = calcularMargemContribuicao(
+    preco,
+    custoSemGastosMensais,
+    receita.percentuaisSemLucro,
+  );
+  const lucroPorUnidade =
+    preco - custoUnitario - receita.percentuaisSemLucro * preco;
   return {
-    custoUnitario: custo,
+    custoUnitario,
+    custoSemGastosMensais,
     precoVenda: preco,
     volume,
-    lucroEstimado: margemPorUnidade * volume,
-    margemProjetada: margemPorUnidade / preco,
-    // O break-even já é a saída (unidades inteiras). O round6 tira o ruído do
-    // ponto flutuante antes do teto: 60.00000000000001 não pode virar 61.
-    breakEven: Math.ceil(round6((custo * volume) / preco)),
+    percentuaisSemLucro: receita.percentuaisSemLucro,
+    margemContribuicao,
+    lucroPorUnidade,
+    lucroReal: lucroPorUnidade / preco,
+    lucroMes: lucroPorUnidade * volume,
+    gastosMensais: receita.gastosMensais,
+    pontoEquilibrio: calcularPontoEquilibrioProduto(
+      receita.gastosMensais,
+      margemContribuicao,
+    ),
+    // O round6 tira o ruído do ponto flutuante antes do teto.
+    breakEven: Math.ceil(round6((custoUnitario * volume) / preco)),
   };
 }
 

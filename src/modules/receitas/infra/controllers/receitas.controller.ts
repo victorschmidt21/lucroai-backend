@@ -63,7 +63,7 @@ export class ReceitasController {
     );
   }
 
-  /** Simula lucro, margem e break-even (400 sem custo, sem preço ou com preço 0) */
+  /** Simula preço praticado, canal e volume do mês: lucro real, lucro no mês e ponto de equilíbrio (400 sem preço ou com preço 0) */
   @Post(':id/simular')
   simular(
     @Param('id', ParseIntPipe) id: number,

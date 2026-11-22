@@ -6,7 +6,9 @@ import {
   calcularCustoItem,
   calcularCustoReceita,
   calcularCustoUnitario,
+  calcularMargemContribuicao,
   calcularPercentuaisSemLucro,
+  calcularPontoEquilibrioProduto,
   calcularPreco,
   calcularPrecoNoCanal,
   calcularPrecoVenda,
@@ -16,6 +18,7 @@ import {
   margemDoLucro,
   resolverFichaTecnica,
   simularCenario,
+  somarGastosMensais,
   somarGastosMensaisLote,
   somarGastosPercentuais,
   somarGastosPorUnidade,
@@ -167,6 +170,8 @@ describe('calcularCustoUnitario (BE-28)', () => {
       embalagem: 0.3,
       perdas: expect.closeTo(0.5, P),
       custoUnitario: expect.closeTo(2.5, P),
+      // (1 + 0,3 + 0,2) ÷ 0,8 (BE-31)
+      custoSemGastosMensais: expect.closeTo(1.875, P),
     });
   });
 
@@ -554,47 +559,139 @@ describe('calcularCustoReceita para N lotes', () => {
   });
 });
 
-describe('simularCenario', () => {
-  const pao = { custoUnitario: 0.07, precoSugerido: 0.11, rendimento: 50 };
+describe('somarGastosMensais (BE-31)', () => {
+  it('soma só os gastos MENSAL, o mês inteiro', () => {
+    expect(somarGastosMensais(gastosSeed)).toBe(2435);
+    expect(somarGastosMensais([])).toBe(0);
+  });
+});
 
-  it('sem entrada usa custo, preço e rendimento salvos', () => {
-    expect(simularCenario({}, pao)).toEqual({
-      custoUnitario: 0.07,
-      precoVenda: 0.11,
-      volume: 50,
-      lucroEstimado: expect.closeTo(2, P),
-      margemProjetada: expect.closeTo(0.04 / 0.11, P),
-      breakEven: 32,
+describe('calcularMargemContribuicao (BE-31)', () => {
+  it('preço − custo sem gastos mensais − percentuais × preço', () => {
+    // 2 − 0,8 − 0,1 × 2
+    expect(calcularMargemContribuicao(2, 0.8, 0.1)).toBeCloseTo(1, P);
+  });
+
+  it('pode ser negativa', () => {
+    expect(calcularMargemContribuicao(1, 1.2, 0)).toBeCloseTo(-0.2, P);
+  });
+});
+
+describe('calcularPontoEquilibrioProduto (BE-31)', () => {
+  it('gastos mensais ÷ MCu, arredondado para cima em unidades', () => {
+    expect(calcularPontoEquilibrioProduto(2435, 1)).toEqual({
+      unidades: 2435,
+      motivo: null,
+    });
+    expect(calcularPontoEquilibrioProduto(100, 0.3)).toEqual({
+      unidades: 334,
+      motivo: null,
     });
   });
 
-  it('com novo custo, preço e volume', () => {
+  it('ignora o ruído do ponto flutuante antes do teto', () => {
+    // 0,3 ÷ 0,1 = 2,9999999999999996
+    expect(calcularPontoEquilibrioProduto(0.3, 0.1).unidades).toBe(3);
+  });
+
+  it('sem gastos mensais o ponto é 0', () => {
+    expect(calcularPontoEquilibrioProduto(0, 0.5).unidades).toBe(0);
+  });
+
+  it('MCu ≤ 0 → null com MARGEM_NEGATIVA', () => {
+    expect(calcularPontoEquilibrioProduto(2435, 0)).toEqual({
+      unidades: null,
+      motivo: 'MARGEM_NEGATIVA',
+    });
+    expect(calcularPontoEquilibrioProduto(2435, -0.2)).toEqual({
+      unidades: null,
+      motivo: 'MARGEM_NEGATIVA',
+    });
+  });
+});
+
+describe('simularCenario (BE-31)', () => {
+  // Pão francês do critério da BE-28 no Balcão: custo de R$ 0,5822, custo
+  // sem gastos mensais de 3,305 ÷ 50 ÷ 0,95, maquininha de 1,36%, lucro de
+  // 15% e gastos mensais de R$ 2.435.
+  const detalhe = custoPao().detalhe;
+  const precoBalcao = calcularPrecoNoCanal(
+    detalhe,
+    { balcao: true, comissaoPercentual: 0 },
+    basePao,
+  ).preco;
+  const pao = {
+    custo: detalhe,
+    precoNoCanal: precoBalcao,
+    rendimento: 50,
+    percentuaisSemLucro: 0.0136,
+    gastosMensais: 2435,
+  };
+
+  it('pelo preço sugerido, o lucro real é o lucro configurado (critério)', () => {
+    const r = simularCenario({}, pao);
+    expect(round4(r.precoVenda)).toBe(0.6961);
+    expect(round4(r.lucroReal)).toBe(0.15);
+    expect(r.lucroReal).toBeCloseTo(0.15, P);
+    expect(r.volume).toBe(50);
+    expect(r.lucroPorUnidade).toBeCloseTo(0.15 * r.precoVenda, P);
+    expect(r.lucroMes).toBeCloseTo(0.15 * r.precoVenda * 50, P);
+  });
+
+  it('margem de contribuição e ponto de equilíbrio do pão', () => {
+    const r = simularCenario({}, pao);
+    const semMensais = 3.305 / 50 / 0.95;
+    expect(r.custoSemGastosMensais).toBeCloseTo(semMensais, P);
+    // 0,696088 × (1 − 0,0136) − 0,069579 ≈ 0,61698
+    expect(r.margemContribuicao).toBeCloseTo(
+      r.precoVenda * (1 - 0.0136) - semMensais,
+      P,
+    );
+    // 2435 ÷ 0,61698 ≈ 3946,6
+    expect(r.pontoEquilibrio).toEqual({ unidades: 3947, motivo: null });
+    expect(r.gastosMensais).toBe(2435);
+  });
+
+  it('preço praticado, volume e canal informados', () => {
+    // Pão a R$ 0,70 no iFood (15,2%), 1.000 por mês
+    const r = simularCenario(
+      { novoPreco: 0.7, volume: 1000 },
+      { ...pao, percentuaisSemLucro: 0.152 },
+    );
+    const custo = 27.655 / 50 / 0.95;
+    expect(r.precoVenda).toBe(0.7);
+    expect(r.lucroPorUnidade).toBeCloseTo(0.7 - custo - 0.152 * 0.7, P);
+    expect(r.lucroReal).toBeCloseTo((0.7 - custo - 0.152 * 0.7) / 0.7, P);
+    expect(r.lucroMes).toBeCloseTo((0.7 - custo - 0.152 * 0.7) * 1000, P);
+  });
+
+  it('novoCusto troca o custo e tira dele a parte dos gastos mensais', () => {
+    const parteMensal = detalhe.custoUnitario - detalhe.custoSemGastosMensais;
+    const r = simularCenario({ novoCusto: 1, novoPreco: 2 }, pao);
+    expect(r.custoUnitario).toBe(1);
+    expect(r.custoSemGastosMensais).toBeCloseTo(1 - parteMensal, P);
+    // Custo menor que a parte mensal: o custo variável não fica negativo.
     expect(
-      simularCenario({ novoCusto: 0.81, novoPreco: 1.22, volume: 37 }, pao),
-    ).toEqual({
-      custoUnitario: 0.81,
-      precoVenda: 1.22,
-      volume: 37,
-      lucroEstimado: expect.closeTo(15.17, P),
-      margemProjetada: expect.closeTo(0.41 / 1.22, P),
-      breakEven: 25,
+      simularCenario({ novoCusto: 0.1, novoPreco: 2 }, pao)
+        .custoSemGastosMensais,
+    ).toBe(0);
+  });
+
+  it('margem de contribuição ≤ 0 → ponto de equilíbrio null com MARGEM_NEGATIVA (critério)', () => {
+    const r = simularCenario({ novoPreco: 0.06 }, pao);
+    expect(r.margemContribuicao).toBeLessThan(0);
+    expect(r.lucroReal).toBeLessThan(0);
+    expect(r.pontoEquilibrio).toEqual({
+      unidades: null,
+      motivo: 'MARGEM_NEGATIVA',
     });
   });
 
-  it('prejuízo: lucro e margem negativos, break-even acima do volume', () => {
+  it('breakEven legado: ceil(custo × volume ÷ preço), sem o ruído', () => {
     expect(
-      simularCenario({ novoCusto: 2, novoPreco: 1.5, volume: 100 }, pao),
-    ).toEqual({
-      custoUnitario: 2,
-      precoVenda: 1.5,
-      volume: 100,
-      lucroEstimado: -50,
-      margemProjetada: expect.closeTo(-1 / 3, P),
-      breakEven: 134,
-    });
-  });
-
-  it('break-even ignora o ruído do ponto flutuante', () => {
+      simularCenario({ novoCusto: 0.81, novoPreco: 1.22, volume: 37 }, pao)
+        .breakEven,
+    ).toBe(25);
     // 0.1 × 3 / 0.1 = 3.0000000000000004: o teto direto daria 4
     expect(
       simularCenario({ novoCusto: 0.1, novoPreco: 0.1, volume: 3 }, pao)
@@ -602,17 +699,8 @@ describe('simularCenario', () => {
     ).toBe(3);
   });
 
-  it('sem custo salvo nem novoCusto → 400 RECEITA_SEM_CUSTO', () => {
-    expect(() => simularCenario({}, { ...pao, custoUnitario: null })).toThrow(
-      expect.objectContaining({
-        code: 'RECEITA_SEM_CUSTO',
-        message: 'Receita sem custo calculado. Informe novoCusto para simular.',
-      }),
-    );
-  });
-
-  it('sem preço salvo nem novoPreco → 400 RECEITA_SEM_PRECO', () => {
-    expect(() => simularCenario({}, { ...pao, precoSugerido: null })).toThrow(
+  it('sem preço no canal nem novoPreco → 400 RECEITA_SEM_PRECO', () => {
+    expect(() => simularCenario({}, { ...pao, precoNoCanal: null })).toThrow(
       expect.objectContaining({
         code: 'RECEITA_SEM_PRECO',
         message:
@@ -620,18 +708,15 @@ describe('simularCenario', () => {
       }),
     );
     expect(
-      simularCenario({ novoPreco: 0.2 }, { ...pao, precoSugerido: null })
+      simularCenario({ novoPreco: 0.2 }, { ...pao, precoNoCanal: null })
         .precoVenda,
     ).toBe(0.2);
   });
 
   it('preço 0 → 400 PRECO_INVALIDO em vez de NaN (lacuna 27)', () => {
-    expect(() =>
-      simularCenario(
-        {},
-        { custoUnitario: 0, precoSugerido: 0, rendimento: 10 },
-      ),
-    ).toThrow(expect.objectContaining({ code: 'PRECO_INVALIDO' }));
+    expect(() => simularCenario({}, { ...pao, precoNoCanal: 0 })).toThrow(
+      expect.objectContaining({ code: 'PRECO_INVALIDO' }),
+    );
   });
 });
 
