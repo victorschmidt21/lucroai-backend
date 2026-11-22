@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  calcularAumentoReposicao,
   calcularCustoMedio,
   calcularCustoReposicao,
   calcularCustoUnitario,
+  precoDefasado,
   resolverPrecoMercado,
 } from './insumos.calculos.js';
 
@@ -95,5 +97,78 @@ describe('resolverPrecoMercado', () => {
     expect(
       resolverPrecoMercado(atual, { valorPago: 5, quantidadeBaseCusto: 1000 }),
     ).toBeUndefined();
+  });
+});
+
+describe('calcularAumentoReposicao', () => {
+  it('é a reposição sobre o médio menos 1, em fração', () => {
+    // Farinha: médio R$ 0,004/g, reposição (última compra) R$ 0,005/g → 25%
+    expect(
+      calcularAumentoReposicao({
+        custoMedio: 0.004,
+        precoMercado: null,
+        ultimoCusto: 0.005,
+      }),
+    ).toBeCloseTo(0.25, 10);
+  });
+
+  it('usa o preço de mercado quando informado', () => {
+    expect(
+      calcularAumentoReposicao({
+        custoMedio: 4,
+        precoMercado: 6,
+        ultimoCusto: 4,
+      }),
+    ).toBe(0.5);
+  });
+
+  it('é negativo quando a reposição caiu', () => {
+    expect(
+      calcularAumentoReposicao({
+        custoMedio: 5,
+        precoMercado: null,
+        ultimoCusto: 4,
+      }),
+    ).toBeCloseTo(-0.2, 10);
+  });
+
+  it('custo médio ≤ 0 dá null', () => {
+    expect(
+      calcularAumentoReposicao({
+        custoMedio: 0,
+        precoMercado: null,
+        ultimoCusto: 1,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe('precoDefasado', () => {
+  const insumo = (custoMedio: number, ultimoCusto: number) => ({
+    custoMedio,
+    precoMercado: null,
+    ultimoCusto,
+  });
+
+  it('reposição 25% acima do médio está defasada', () => {
+    expect(precoDefasado(insumo(0.004, 0.005))).toBe(true);
+  });
+
+  it('10% exatos não estão defasados, mesmo com o erro de ponto flutuante', () => {
+    // 0.0055 / 0.005 - 1 = 0.10000000000000009
+    expect(precoDefasado(insumo(0.005, 0.0055))).toBe(false);
+  });
+
+  it('pouco acima de 10% está defasado', () => {
+    expect(precoDefasado(insumo(1, 1.1001))).toBe(true);
+  });
+
+  it('reposição igual ou abaixo do médio não está defasada', () => {
+    expect(precoDefasado(insumo(5, 5))).toBe(false);
+    expect(precoDefasado(insumo(5, 4))).toBe(false);
+  });
+
+  it('custo médio 0 não está defasado', () => {
+    expect(precoDefasado(insumo(0, 5))).toBe(false);
   });
 });

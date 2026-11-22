@@ -137,6 +137,23 @@ export class InsumoService {
     return rows;
   }
 
+  /**
+   * Para o módulo alertas (BE-32): os insumos da empresa, por nome, com o
+   * saldo do estoque (0 sem registro) e os custos salvos **sem arredondar**.
+   */
+  async listarComSaldo(
+    empresaId: number,
+  ): Promise<(Insumo & { quantidadeDisponivel: number })[]> {
+    const [rows, saldos] = await Promise.all([
+      this.repository.listByEmpresa(empresaId),
+      this.estoqueService.saldosPorInsumo(empresaId),
+    ]);
+    return rows.map((row) => ({
+      ...row,
+      quantidadeDisponivel: saldos.get(row.id)?.quantidadeDisponivel ?? 0,
+    }));
+  }
+
   private async comSaldo(row: Insumo): Promise<InsumoDto> {
     const saldos = await this.estoqueService.saldosPorInsumo(row.empresaId, [
       row.id,

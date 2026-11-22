@@ -1,3 +1,5 @@
+import { round6 } from '../../../shared/domain/arredondamento.js';
+
 /**
  * Custo de uma unidade da base de custo: `valorPago / quantidadeBaseCusto`.
  * **Sem arredondamento**, como `insumo.entity.ts` do catalog-service
@@ -75,4 +77,37 @@ export function resolverPrecoMercado(
     return undefined;
   }
   return calcularCustoUnitario(valorPago, quantidadeBaseCusto);
+}
+
+/** Aumento da reposição sobre o médio acima do qual o preço está defasado (BE-32). */
+export const LIMITE_PRECO_DEFASADO = 0.1;
+
+/**
+ * Quanto a reposição subiu sobre o custo médio (BE-32), em fração:
+ * `custoReposicao ÷ custoMedio − 1` (0,25 = 25%; negativo quando caiu).
+ * `null` com custo médio ≤ 0, que não tem base para comparar.
+ */
+export function calcularAumentoReposicao(insumo: {
+  custoMedio: number;
+  precoMercado: number | null;
+  ultimoCusto: number;
+}): number | null {
+  if (insumo.custoMedio <= 0) return null;
+  return calcularCustoReposicao(insumo) / insumo.custoMedio - 1;
+}
+
+/**
+ * Preço defasado (BE-32): a reposição subiu **mais** de 10% sobre o custo
+ * médio, então o estoque foi comprado mais barato do que custa repor e o
+ * preço formado com o médio ficou para trás. O aumento é comparado com 6
+ * casas, para 10% exatos (ex.: 0,0055 ÷ 0,005 − 1 = 0,10000000000000009)
+ * não contarem como acima do limite.
+ */
+export function precoDefasado(insumo: {
+  custoMedio: number;
+  precoMercado: number | null;
+  ultimoCusto: number;
+}): boolean {
+  const aumento = calcularAumentoReposicao(insumo);
+  return aumento !== null && round6(aumento) > LIMITE_PRECO_DEFASADO;
 }

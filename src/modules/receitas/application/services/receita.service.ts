@@ -70,6 +70,20 @@ interface ContextoCusto {
   canais: Awaited<ReturnType<CanalVendaService['listarAtivosDaEmpresa']>>;
 }
 
+/**
+ * Preço sugerido de uma receita (BE-32), para o alerta de preço defasado.
+ * Valores **sem arredondar**; `null` com percentuais ≥ 100%.
+ */
+export interface PrecoSugeridoReceita {
+  id: number;
+  nome: string;
+  insumoIds: number[];
+  /** Preço do Balcão com o custo de reposição: o novo preço sugerido. */
+  precoSugerido: number | null;
+  /** Preço do Balcão com o custo médio: o preço que o estoque pagaria. */
+  precoComCustoMedio: number | null;
+}
+
 /** O Balcão, cuja taxa é a da maquininha: base do `precoSugerido` (BE-28). */
 const BALCAO = { balcao: true, comissaoPercentual: 0 };
 
@@ -242,6 +256,34 @@ export class ReceitaService {
       custo: this.calcular(receita, contexto, 1, contexto.custoMedioPorInsumo),
       basePreco: this.basePreco(receita, contexto),
     };
+  }
+
+  /**
+   * Para o módulo alertas (BE-32): o preço sugerido (Balcão) de cada receita
+   * da empresa com o custo de reposição e com o custo médio dos insumos.
+   */
+  async listarPrecosSugeridos(
+    empresaId: number,
+  ): Promise<PrecoSugeridoReceita[]> {
+    const rows = await this.repository.listByEmpresa(empresaId);
+    const contexto = await this.contexto(
+      rows.flatMap((row) => row.itens.map((item) => item.insumoId)),
+      empresaId,
+    );
+    return rows.map((row) => {
+      const base = this.basePreco(row, contexto);
+      const preco = (custo: CustoReceita) =>
+        calcularPrecoNoCanal(custo.detalhe, BALCAO, base).preco;
+      return {
+        id: row.id,
+        nome: row.nome,
+        insumoIds: row.itens.map((item) => item.insumoId),
+        precoSugerido: preco(this.calcular(row, contexto)),
+        precoComCustoMedio: preco(
+          this.calcular(row, contexto, 1, contexto.custoMedioPorInsumo),
+        ),
+      };
+    });
   }
 
   private fichaInformada(

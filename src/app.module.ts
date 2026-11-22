@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { validate } from './config/env.validation.js';
+import { AlertasModule } from './modules/alertas/alertas.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { CanaisModule } from './modules/canais/canais.module.js';
 import { ConfiguracaoCustosModule } from './modules/configuracao-custos/configuracao-custos.module.js';
@@ -30,6 +31,7 @@ import { HealthModule } from './shared/infra/health/health.module.js';
     ReceitasModule,
     ProducoesModule,
     VendasModule,
+    AlertasModule,
   ],
 })
 export class AppModule {}
