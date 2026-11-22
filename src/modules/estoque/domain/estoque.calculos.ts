@@ -51,3 +51,12 @@ export function calcularSaidaProdutoAcabado(
   }
   return calcularSaldoAposMovimentacao(disponivel, 'SAIDA', quantidade);
 }
+
+/**
+ * Saldo de insumo abaixo de zero (BE-32). O estoque negativo continua
+ * permitido (a produção não confere o saldo); a indicação só avisa a pessoa
+ * nas listas e em `GET /alertas`. Saldo 0 não é negativo.
+ */
+export function estoqueNegativo(saldo: number): boolean {
+  return saldo < 0;
+}

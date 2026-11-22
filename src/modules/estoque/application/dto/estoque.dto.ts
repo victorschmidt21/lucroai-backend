@@ -1,4 +1,5 @@
 import type { Estoque } from '../../../../generated/prisma/client.js';
+import { estoqueNegativo } from '../../domain/estoque.calculos.js';
 
 /** Saldo de estoque de um insumo, como o `EstoqueDto` do operations-service. */
 export class EstoqueDto {
@@ -10,6 +11,8 @@ export class EstoqueDto {
   quantidadeDisponivel: number;
   /** @example 200 */
   quantidadeMinima: number;
+  /** Novo (BE-32): `quantidadeDisponivel < 0`, para a indicação visual. @example false */
+  estoqueNegativo: boolean;
   /** `null` enquanto o saldo não foi alterado. @example '2026-01-15T12:00:00.000Z' */
   dataAlteracao: Date | null;
 }
@@ -20,6 +23,7 @@ export function toEstoqueDto(row: Estoque): EstoqueDto {
     insumoId: row.insumoId,
     quantidadeDisponivel: row.quantidadeDisponivel,
     quantidadeMinima: row.quantidadeMinima,
+    estoqueNegativo: estoqueNegativo(row.quantidadeDisponivel),
     dataAlteracao: row.dataAlteracao,
   };
 }

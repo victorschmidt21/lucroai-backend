@@ -3,6 +3,7 @@ import type {
   UnidadeMedida,
 } from '../../../../generated/prisma/client.js';
 import { round6 } from '../../../../shared/domain/arredondamento.js';
+import { estoqueNegativo } from '../../../estoque/domain/estoque.calculos.js';
 import { calcularCustoReposicao } from '../../domain/insumos.calculos.js';
 
 interface Saldo {
@@ -23,6 +24,8 @@ export class InsumoDto {
   quantidadeDisponivel: number;
   /** Estoque mínimo (novo, BE-07). @example 0 */
   quantidadeMinima: number;
+  /** Novo (BE-32): `quantidadeDisponivel < 0`, para a indicação visual. @example false */
+  estoqueNegativo: boolean;
   /** @example 'G' */
   unidade: UnidadeMedida;
   /** Valor do último preço de referência. @example 5 */
@@ -51,13 +54,15 @@ export class InsumoDto {
 /** Sem registro de estoque, saldo e mínimo são 0, como no catalog-service. */
 export function toInsumoDto(row: Insumo, saldo?: Saldo): InsumoDto {
   const custoReposicao = round6(calcularCustoReposicao(row));
+  const quantidadeDisponivel = saldo?.quantidadeDisponivel ?? 0;
   return {
     id: row.id,
     empresaId: row.empresaId,
     nome: row.nome,
     quantidadeBaseCusto: row.quantidadeBaseCusto,
-    quantidadeDisponivel: saldo?.quantidadeDisponivel ?? 0,
+    quantidadeDisponivel,
     quantidadeMinima: saldo?.quantidadeMinima ?? 0,
+    estoqueNegativo: estoqueNegativo(quantidadeDisponivel),
     unidade: row.unidade,
     valorPago: row.valorPago,
     custoUnitario: custoReposicao,
