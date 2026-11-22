@@ -4,7 +4,7 @@ Guia para agentes de IA (Claude Code, Codex, Cursor, Copilot etc.) e para o time
 
 ## Visão geral
 
-Backend do **LucroAI**: sistema de custos e lucro para pequenos produtores de alimentos, como padarias e confeitarias. Insumos com custo unitário, gastos indiretos rateados, receitas com custo de produção e preço sugerido por canal de venda, simulações, estoque de insumos e de produto acabado, produções e vendas.
+Backend do **LucroAI**: sistema de custos e lucro para pequenos produtores de alimentos, como padarias e confeitarias. Insumos com compras, custo médio e custo de reposição, gastos indiretos rateados, receitas com custo de produção e preço sugerido por canal de venda, simulações, estoque de insumos e de produto acabado, produções e vendas.
 
 É um **monolito modular**: uma aplicação NestJS e um banco Postgres, com módulos de domínio em `src/modules/<modulo>/`. Ele substitui os 5 microsserviços do [`GrupoDoisENG/lucroai-backend`](https://github.com/GrupoDoisENG/lucroai-backend) e atende o frontend web ([`lucroai-frontend`](https://github.com/victorschmidt21/lucroai-frontend)) **com o mesmo contrato**: o frontend não pode precisar de mudança.
 

@@ -12,17 +12,17 @@ Cada fórmula vira uma função pura em `src/modules/<modulo>/domain/<modulo>.ca
 
 | Valor na resposta | Casas | Função | Campos |
 | --- | --- | --- | --- |
-| Custo por unidade-base do insumo | 6 | `round6` | `custoUnitario` e `precoUnitario` do insumo |
+| Custo por unidade-base do insumo | 6 | `round6` | `custoUnitario`, `precoUnitario`, `custoMedio`, `ultimoCusto`, `custoReposicao` e `precoMercado` do insumo (BE-29), `custoUnitario` da compra |
 | Custo unitário e preço | 4 | `round4` | `custoUnitario` e `precoSugerido` da receita, as partes por unidade de `custo`, `preco` e os `valor` da `composicao` de `precos` (BE-28), `custo_por_unidade`, `custo_total_unitario`, `preco_sugerido`, `lucro_por_unidade`, `custoUnitario` e `precoVenda` da simulação, `custoUnitario` da produção e do item de venda |
 | Totais em reais | 2 | `round2` | `custoCalculado` do item, `custoProducao`, `custo.ingredientesLote` e `custo.gastosMensaisLote` (BE-28), `custo_invisivel`, `custo_total_producao`, `lucroEstimado`, `custoTotal` e `valorRateado` da produção, `total` da venda |
 | Frações (margens e percentuais) | 4 | `round4` | `margemProjetada` da simulação (eram 2 casas), `margemRealizada` da venda, `margemLucro` e `lucroPercentual` da receita (BE-27), `percentuais` e as `fracao` da `composicao` (BE-28) |
 
 Exemplo (critério da BE-23): farinha 1 kg a R$ 3,00/kg, sal 0,02 kg a R$ 2,50/kg e fermento 15 g a R$ 0,017/g dão custo de ingredientes **R$ 3,305** (`custoIngredientes` de `calcularCustoReceita`), não R$ 3,31 da soma de itens arredondados. Com rendimento 50, o custo unitário é R$ 0,0661 (era R$ 0,07).
 
-- Valores digitados (`valorPago`, `valor` do gasto, `preco_unitario_real`, quantidades, `usoPorLote`, `embalagemPorUnidade` e `perdaPercentual` da receita) voltam como vieram.
+- Valores digitados (`valorPago`, `valorTotal` e `quantidade` da compra, `valor` do gasto, `preco_unitario_real`, quantidades, `usoPorLote`, `embalagemPorUnidade` e `perdaPercentual` da receita) voltam como vieram.
 - Quantidades de estoque e saldos continuam com `round6` ao gravar (não são custo nem preço).
 - O break-even da simulação é `Math.ceil` de `round6(custo × volume / preço)`: o `round6` só tira o ruído do ponto flutuante (`0.1 × 3 / 0.1` dá `3.0000000000000004`, e o teto daria 4).
-- Os services exportados para outros módulos devolvem os valores **sem arredondar**, não o DTO de resposta: `InsumoService.buscarVariosDaEmpresa` devolve os insumos como estão no banco e `ReceitaService.buscarDaEmpresa`, a receita com os itens e o custo de 1 lote calculado na leitura (BE-27).
+- Os services exportados para outros módulos devolvem os valores **sem arredondar**, não o DTO de resposta: `InsumoService.buscarVariosDaEmpresa` devolve os insumos como estão no banco (com `custoMedio`, `ultimoCusto` e `precoMercado` sem arredondar) e `ReceitaService.buscarDaEmpresa`, a receita com os itens e o custo de 1 lote calculado na leitura (BE-27).
 - Cálculo em `number` (`double`), sem biblioteca de decimal: com ~15 dígitos significativos, o erro do ponto flutuante fica muito abaixo das 4 ou 6 casas da resposta, e o arredondamento o elimina.
 
 As três funções ficam em `src/shared/domain/arredondamento.ts`, com teste unitário. **Muda (BE-23):** arredondam meio para cima, longe do zero, e passam o valor escalado por `toPrecision(15)` antes do `Math.round`, para o ruído do ponto flutuante não derrubar o meio (`round2(1.005)` dá `1.01`, e `round2(3 + 0.05 + 0.255)` dá `3.31`). O `Number(v.toFixed(n))` dos microsserviços dava `1` e `3.3`. Não troque por `toFixed` nem por `Math.round(v * 100) / 100`.
@@ -61,21 +61,51 @@ Origem: `auth-service/src/modules/auth/application/services/auth.service.ts` e `
 
 Origem: `catalog-service/src/modules/insumos/domain/models/insumo.entity.ts` e `application/dto/create-insumo.dto.ts`.
 
+**Muda (BE-29): três custos por insumo**, para responder ao "paguei R$ 8, hoje está R$ 10". O **custo médio** mede o que já foi gasto (estoque, produção e venda, como pedem o CPC 16 e o RIR/2018); o **custo de reposição** forma o preço.
+
 ```
-custoUnitario = quantidadeBaseCusto > 0 ? valorPago / quantidadeBaseCusto : 0
+custo informado = quantidadeBaseCusto > 0 ? valorPago / quantidadeBaseCusto : 0     // calcularCustoUnitario
+custoReposicao  = precoMercado ?? ultimoCusto                                         // calcularCustoReposicao
 ```
 
-- **Sem arredondamento** (`calcularCustoUnitario`, em `insumos/domain/insumos.calculos.ts`). O custo unitário guarda a divisão inteira, que entra no custo da receita. **Muda (BE-23):** a resposta mostra o custo com 6 casas (`round6`), como o Omie; hoje mostra a divisão inteira.
-- Recalculado sempre que `valorPago` ou `quantidadeBaseCusto` mudam.
-- `precoUnitario` na resposta é um alias de `custoUnitario` (`insumo.dto.ts`), mantido por compatibilidade.
+| Campo | O que é | Muda quando |
+| --- | --- | --- |
+| `custoMedio` | custo médio móvel por unidade; é o custo de produção e venda (BE-30) | cadastro e [compra](#compras-de-insumo) |
+| `ultimoCusto` | custo por unidade da última compra | cadastro e compra |
+| `precoMercado`, `precoMercadoData` | preço por unidade informado sem compra (opcional, `null` sem valor) | `PATCH` (ver abaixo); a compra seguinte os limpa |
+| `custoReposicao` | `precoMercado ?? ultimoCusto`; é o custo dos ingredientes no [custo da receita](#receitas-custo) e no preço (BE-28) | quando um dos dois acima muda |
+
+- **Sem arredondamento** (`calcularCustoUnitario`, `calcularCustoMedio` e `calcularCustoReposicao`, em `insumos/domain/insumos.calculos.ts`): o banco guarda os custos exatos, e só a resposta os mostra com 6 casas (`round6`, BE-23).
+- **Muda (BE-29):** `custoUnitario` (e o alias `precoUnitario`) da resposta passa a ser o **custo de reposição**, o custo que a receita usa. Antes era `valorPago / quantidadeBaseCusto` gravado no insumo; a coluna `custo_unitario` saiu do `insumo`. Campos novos (aditivos): `custoMedio`, `ultimoCusto`, `custoReposicao`, `precoMercado` e `precoMercadoData`.
+- `valorPago` e `quantidadeBaseCusto` são o último preço de referência: o do cadastro, o da última compra (`valorTotal` e `quantidade`) ou o do último `PATCH` que os mudou. O formulário do frontend mostra e reenvia esses dois.
 - Validação: `quantidadeBaseCusto ≥ 0.000001`, `valorPago ≥ 0` e `quantidadeDisponivelInicial ≥ 0` (opcional).
 - **Muda (BE-07):** nome obrigatório, aparado e com até 80 caracteres (lacuna 12); excluir insumo usado em receita → 409 `INSUMO_EM_USO` (lacuna 13); resposta ganha `quantidadeMinima` (lacuna 5).
-- Criar um insumo sempre cria o registro de estoque (saldo = `quantidadeDisponivelInicial ?? 0`, mínimo 0), na mesma transação, por `EstoqueService.criarRegistroInicial` (BE-07). Com quantidade > 0, cria também uma movimentação `ENTRADA/COMPRA` (sem `referenciaId`). Hoje o estoque nasce por evento (`insumo-criado.consumer.ts`), sem movimentação. O saldo inicial é gravado como veio, sem `round6`, como no consumer.
+- **Cadastro (muda, BE-29):** numa transação só, cria o insumo com `custoMedio = ultimoCusto = valorPago / quantidadeBaseCusto` (sem preço de mercado), uma **compra inicial** (`quantidade = quantidadeDisponivelInicial ?? 0`, `valorTotal = quantidade × custo`, `custoUnitario` = o custo informado, observação "Cadastro do insumo") e o registro de estoque (saldo = `quantidadeDisponivelInicial ?? 0`, mínimo 0) por `EstoqueService.criarRegistroInicial` (BE-07). Com quantidade > 0, cria também uma movimentação `ENTRADA/COMPRA` com `referenciaId` = id da compra inicial. Sem saldo inicial, a compra inicial tem quantidade 0 e só guarda o custo informado. O saldo inicial é gravado como veio, sem `round6`.
 - `quantidadeDisponivel` e `quantidadeMinima` da resposta vêm do estoque (`EstoqueService.saldosPorInsumo`); insumo sem registro de estoque responde 0 nos dois, como o catalog-service.
 - Listagem ordenada por nome (e por id no empate), sem paginação. Hoje a ordem é a do banco.
-- `PATCH` aceita só `nome`, `quantidadeBaseCusto`, `unidade` e `valorPago`; campo omitido mantém o valor salvo. O saldo muda só pelo estoque.
-- Excluir o insumo leva junto o estoque e as movimentações dele (`CASCADE`). Usado em receita → 409 `INSUMO_EM_USO` "Insumo usado em receitas não pode ser excluído" (P2003 da FK `RESTRICT`, traduzido no `InsumoRepository`).
-- Para outros módulos, `InsumoService` exporta `buscarVariosDaEmpresa(ids, empresaId)` (BE-09): ignora ids repetidos e responde 404 `INSUMO_NAO_ENCONTRADO` se algum não existir ou for de outra empresa. Devolve os insumos como estão no banco, com o custo sem arredondar (BE-23).
+- `PATCH` aceita `nome`, `quantidadeBaseCusto`, `unidade`, `valorPago` e, **novo (BE-29)**, `precoMercado` (≥ 0 ou `null`); campo omitido mantém o valor salvo. O saldo muda só pelo estoque e pelas compras, e o `custoMedio` e o `ultimoCusto` só pelas compras. O preço de mercado depois do `PATCH` sai de `resolverPrecoMercado`:
+  - `precoMercado` no corpo vale como veio (`precoMercadoData` = agora); `null` limpa os dois, e a reposição volta ao último custo;
+  - sem ele, um `valorPago` ou `quantidadeBaseCusto` **diferente do salvo** vira `precoMercado = valorPago / quantidadeBaseCusto`. É como o formulário atual muda o preço de um insumo; reenviar os valores salvos (só mudar o nome) não mexe no preço.
+- Excluir o insumo leva junto o estoque, as movimentações e as compras dele (`CASCADE`). Usado em receita → 409 `INSUMO_EM_USO` "Insumo usado em receitas não pode ser excluído" (P2003 da FK `RESTRICT`, traduzido no `InsumoRepository`).
+- Para outros módulos, `InsumoService` exporta `buscarVariosDaEmpresa(ids, empresaId)` (BE-09): ignora ids repetidos e responde 404 `INSUMO_NAO_ENCONTRADO` se algum não existir ou for de outra empresa. Devolve os insumos como estão no banco, com os custos sem arredondar (BE-23); quem precisa da reposição usa `calcularCustoReposicao` (receitas) e quem precisa do médio usa `custoMedio` (produção e venda, BE-30).
+
+### Compras de insumo
+
+**Novo (BE-29).** `POST /insumos/:id/compras` registra uma compra (`quantidade` na unidade do insumo, `valorTotal` pago e `observacao` opcional), e `GET /insumos/:id/compras` lista as compras do insumo, a mais recente primeiro. A compra é **imutável** (não tem `PUT` nem `DELETE`), e a data é a do registro.
+
+```
+custoCompra = valorTotal / quantidade                                                 // calcularCustoUnitario
+custoMedio  = saldo ≤ 0 ? custoCompra
+            : (saldo × custoMedio + quantidade × custoCompra) ÷ (saldo + quantidade)  // calcularCustoMedio
+```
+
+- Numa transação só: grava a compra, dá entrada da `quantidade` no estoque (`EstoqueService.registrarEntradaPorCompra`: `ENTRADA/COMPRA`, `referenciaId` = id da compra, a mesma `observacao`) e atualiza o insumo. `saldo` é o saldo **antes** da entrada, lido com a linha do estoque travada (`FOR UPDATE`), e o insumo é lido de novo depois da trava: duas compras simultâneas do mesmo insumo não ponderam o mesmo saldo nem o mesmo médio.
+- Com saldo ≤ 0 (o estoque negativo continua permitido), o médio passa a ser o custo da compra: não há estoque com custo a ponderar, e um saldo negativo daria peso negativo ao médio antigo.
+- A compra vira o `ultimoCusto` e o preço de referência (`valorPago = valorTotal`, `quantidadeBaseCusto = quantidade`) e **limpa o preço de mercado**: ela é a informação de preço mais nova. Assim, a reposição depois de uma compra é o custo dela.
+- Validação: `quantidade ≥ 0.000001`, `valorTotal ≥ 0`, `observacao` até 200 (aparada; vazia vira `null`). Insumo inexistente ou de outra empresa → 404 `INSUMO_NAO_ENCONTRADO`. Responde 201 com a compra.
+- Exemplo (critério da BE-29): saldo de 5 kg com médio R$ 8,00 + compra de 5 kg por R$ 50,00 → médio **R$ 9,00**, último custo e reposição **R$ 10,00**. Informar depois `precoMercado: 12` muda a reposição para R$ 12,00 (e o preço sugerido das receitas), e o médio continua R$ 9,00.
+- A entrada manual de estoque (`POST /estoque/insumos/:id/entrada`, sem valor) continua existindo para o frontend atual e **não mexe nos custos**: é como entrar ao custo médio. Compra com valor é pela rota nova.
+- Sem migração de dados (não há dados reais): os insumos que já existiam ficaram com médio e último iguais ao custo unitário que tinham, sem compra inicial.
 
 ## Configuração de custos
 
@@ -147,12 +177,12 @@ Cadastro:
 
 Origem: `recipe-service/src/modules/custos/application/services/custo.service.ts` (`calcularReceita`, `calcularItens`, `calcularCustoTotalProducao`, `calcularCustoPorUnidade`, `calcularPrecoSugerido`) e `default-custo-invisivel-result.provider.ts`.
 
-**Muda (BE-27): o custo não é mais gravado.** A receita guarda só a ficha técnica; `custoProducao`, `custoUnitario`, `precoSugerido` e o `custoCalculado` dos itens são calculados **na leitura** (listagem, detalhe, cadastro, edição, custo, simulação, preço de venda e `buscarDaEmpresa`), com os custos atuais dos insumos, os gastos atuais e a configuração de custos da empresa. Mudar o custo de um insumo ou um gasto passa a mudar o custo das receitas na hora.
+**Muda (BE-27): o custo não é mais gravado.** A receita guarda só a ficha técnica; `custoProducao`, `custoUnitario`, `precoSugerido` e o `custoCalculado` dos itens são calculados **na leitura** (listagem, detalhe, cadastro, edição, custo, simulação, preço de venda e `buscarDaEmpresa`), com os custos de reposição dos insumos (BE-29), os gastos atuais e a configuração de custos da empresa. Mudar o custo de um insumo ou um gasto passa a mudar o custo das receitas na hora.
 
 **Muda (BE-28): fórmula nova**, igual em todas as telas, que substitui `custo × (1 + margem)` e o custo invisível somado ao lote. Custo de 1 unidade:
 
 ```
-ingredientesLote  = Σ item.quantidade × insumo.custoUnitario            // reposição na BE-29; até lá, o custo atual
+ingredientesLote  = Σ item.quantidade × insumo.custoReposicao           // BE-29: precoMercado ?? ultimoCusto
 gastosMensaisLote = Σ gastos MENSAL × usoPorLote ÷ capacidadeMensal
 custoUnitario     = ((ingredientesLote + gastosMensaisLote) ÷ rendimento
                      + embalagemPorUnidade + Σ gastos POR_UNIDADE) ÷ (1 − perdaPercentual)   // rendimento ≤ 0 → 400
@@ -162,7 +192,7 @@ Para `lotes` lotes (as respostas de receita usam `lotes = 1`):
 
 ```
 quantidadeItem    = item.quantidade × lotes
-custoCalculado    = quantidadeItem × insumo.custoUnitario                // por item
+custoCalculado    = quantidadeItem × insumo.custoReposicao               // por item
 custoIngredientes = Σ custoCalculado
 totalUnidades     = rendimento × lotes
 custoInvisivel    = Σ calcularGastoNoCusto(gasto, { lotes, totalUnidades, capacidadeMensal, usoPorLote })  // MENSAL e POR_UNIDADE (BE-26)
@@ -219,7 +249,7 @@ Origem: `recipe-service/src/modules/receitas/application/services/receita.servic
 
 Origem: `custo.service.ts` (`calcularPorReceita`, `simularPorReceita`) e `custos/application/dto/receita-custo.dto.ts`.
 
-`GET /receitas/:id/custo` (1 lote) e `POST /receitas/:id/custo/simular` (`quantidadeLotes`, inteiro > 0) calculam com os custos atuais dos insumos e os gastos atuais da empresa, pela fórmula acima (como toda leitura de receita desde a BE-27). A resposta é `snake_case` (lacuna 15, mantida):
+`GET /receitas/:id/custo` (1 lote) e `POST /receitas/:id/custo/simular` (`quantidadeLotes`, inteiro > 0) calculam com os custos de reposição dos insumos (BE-29) e os gastos atuais da empresa, pela fórmula acima (como toda leitura de receita desde a BE-27). A resposta é `snake_case` (lacuna 15, mantida):
 
 | Campo | Valor |
 | --- | --- |
@@ -299,7 +329,8 @@ saída:   saldo = round6(saldo − quantidade)          // pode ficar negativo
 - Toda mudança de saldo grava uma movimentação (`tipo`, `origem`, `quantidade`, `referenciaId`) **na mesma transação**. A linha do estoque é travada (`SELECT ... FOR UPDATE`) antes de ler o saldo, para duas movimentações simultâneas não perderem uma atualização.
 - Insumo inexistente ou de outra empresa → 404 `INSUMO_NAO_ENCONTRADO` "Insumo não encontrado", conferido pelo `empresa_id` do próprio estoque. Como todo insumo nasce com o registro de estoque (BE-07), não existe mais a resposta com `id: 0` do operations-service para insumo sem registro.
 - `GET /estoque/insumos` (BE-11, lacuna 5) devolve um item por insumo da empresa, inclusive os sem movimentação, em ordem de `insumoId`.
-- Entrada manual: `quantidade ≥ 0.000001`, origem `COMPRA`; a movimentação grava a quantidade como veio (só o saldo leva `round6`). Responde 201. **Muda (BE-11, lacuna 22):** aceita `observacao` (opcional, até 200, aparada; vazia vira `null`).
+- Entrada manual: `quantidade ≥ 0.000001`, origem `COMPRA`, `referenciaId` `null`; a movimentação grava a quantidade como veio (só o saldo leva `round6`). Responde 201. **Muda (BE-11, lacuna 22):** aceita `observacao` (opcional, até 200, aparada; vazia vira `null`). Não mexe no custo do insumo (BE-29).
+- Entrada por compra (**novo**, BE-29, `EstoqueService.registrarEntradaPorCompra`, dentro da `tx` da compra): como a manual, com `referenciaId` = id da compra; devolve o saldo anterior, que pondera o custo médio ([Compras de insumo](#compras-de-insumo)). A compra inicial do cadastro também liga a movimentação dela pelo `referenciaId`.
 - Baixa por produção (`EstoqueService.baixarPorProducao`, dentro da `tx` da produção): para cada item da receita, `quantidade = round6(item.quantidade × lotes)`, origem `PRODUCAO`, `referenciaId` = id da produção.
 - **Saldo negativo é aceito** (lacuna 10, mantida na BE-11). Bloquear a produção sem saldo é decisão de produto e pede uma issue própria.
 - Estoque mínimo começa em 0. **Muda (BE-11, lacuna 14):** `PATCH /estoque/insumos/:id/minimo` define o mínimo (≥ 0), sem movimentação; responde 200.

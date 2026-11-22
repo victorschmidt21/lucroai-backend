@@ -39,12 +39,12 @@ Cada tabela pertence a **um** módulo, e só ele lê e escreve nela pelo Prisma.
 | Módulo | Tabelas (models) | Responsabilidade | Depende de | Issues |
 | --- | --- | --- | --- | --- |
 | `auth` | `Empresa`, `Usuario` | cadastro de empresa (com a configuração de custos e os canais de venda padrão na mesma transação), login e JWT (assinado com o `JwtService` do `JwtAuthModule`); não exporta service | `configuracao-custos`, `canais` | BE-06, BE-24, BE-25 |
-| `estoque` | `Estoque`, `MovimentacaoEstoque`, `EstoqueProdutoAcabado`, `MovimentacaoProdutoAcabado` | saldo e histórico de insumos e de produto acabado; exporta `EstoqueService` (`criarRegistroInicial` e `saldosPorInsumo` desde a BE-07; `baixarPorProducao(itens, lotes, producaoId, empresaId, tx)` desde a BE-11) e `EstoqueProdutoAcabadoService` (`entradaPorProducao(receitaId, totalUnidades, producaoId, empresaId, tx)` e `saidaPorVenda(receitaId, quantidade, vendaId, empresaId, tx)` desde a BE-12) | — | BE-07, BE-11, BE-12 |
-| `insumos` | `Insumo` | cadastro de insumos e custo unitário; cria o estoque inicial na mesma transação; exporta `InsumoService` (`buscarVariosDaEmpresa` desde a BE-09) | `estoque` | BE-07 |
+| `estoque` | `Estoque`, `MovimentacaoEstoque`, `EstoqueProdutoAcabado`, `MovimentacaoProdutoAcabado` | saldo e histórico de insumos e de produto acabado; exporta `EstoqueService` (`criarRegistroInicial` e `saldosPorInsumo` desde a BE-07; `baixarPorProducao(itens, lotes, producaoId, empresaId, tx)` desde a BE-11; `registrarEntradaPorCompra(insumoId, quantidade, compraId, observacao, empresaId, tx)` desde a BE-29) e `EstoqueProdutoAcabadoService` (`entradaPorProducao(receitaId, totalUnidades, producaoId, empresaId, tx)` e `saidaPorVenda(receitaId, quantidade, vendaId, empresaId, tx)` desde a BE-12) | — | BE-07, BE-11, BE-12 |
+| `insumos` | `Insumo`, `CompraInsumo` | cadastro de insumos; compras (`POST`/`GET /insumos/:id/compras`), com entrada no estoque e custo médio móvel (`calcularCustoMedio`), e custo de reposição (`calcularCustoReposicao`, usado pelas receitas); o cadastro cria a compra inicial e o estoque inicial na mesma transação; exporta `InsumoService` (`buscarVariosDaEmpresa` desde a BE-09) | `estoque` | BE-07, BE-29 |
 | `configuracao-custos` | `ConfiguracaoCustos` | configuração de custos da empresa (base de rateio, capacidade mensal, lucro, imposto e maquininha), com os padrões e a validação (`validarConfiguracaoCustos`); exporta `ConfiguracaoCustosService` (`criarPadrao(empresaId, tx)` e `buscarDaEmpresa(empresaId, tx?)`) | — | BE-24, BE-26 |
 | `canais` | `CanalVenda` | canais de venda com comissão (Balcão, iFood…), CRUD em `/canais`, com os padrões (`CANAIS_PADRAO`), a regra do Balcão (`garantirCanalExcluivel`) e a taxa no preço (`taxaDoCanal`); exporta `CanalVendaService` (`criarPadrao(empresaId, tx)`, `listarAtivosDaEmpresa(empresaId, tx?)`) | — | BE-25, BE-28 |
 | `gastos-indiretos` | `GastoIndireto` | cadastro de gastos por tipo (`MENSAL`, `POR_UNIDADE`, `PERCENTUAL_VENDA`), validação por tipo (`validarGasto`) e a parte de cada gasto no custo (`calcularGastoNoCusto`); exporta `GastoIndiretoService` (`listarPorEmpresa` e `buscarVariosDaEmpresa`) | — | BE-08, BE-26 |
-| `receitas` | `Receita`, `ItemReceita` | receitas com a ficha técnica (`validarFichaTecnica`); custo para 1 ou N lotes (`calcularCustoReceita`, com embalagem e perda) e preço por canal ativo (`calcularPrecoNoCanal`), calculados na leitura e nunca gravados; simulação (`simularCenario`) e preço de venda (`calcularPrecoVenda`), sem gravar; exporta `ReceitaService` (`buscarDaEmpresa`, com o custo de 1 lote) | `insumos`, `gastos-indiretos`, `configuracao-custos`, `canais` | BE-09, BE-10, BE-26, BE-27, BE-28 |
+| `receitas` | `Receita`, `ItemReceita` | receitas com a ficha técnica (`validarFichaTecnica`); custo para 1 ou N lotes, com o custo de reposição dos insumos (BE-29) (`calcularCustoReceita`, com embalagem e perda) e preço por canal ativo (`calcularPrecoNoCanal`), calculados na leitura e nunca gravados; simulação (`simularCenario`) e preço de venda (`calcularPrecoVenda`), sem gravar; exporta `ReceitaService` (`buscarDaEmpresa`, com o custo de 1 lote) | `insumos`, `gastos-indiretos`, `configuracao-custos`, `canais` | BE-09, BE-10, BE-26, BE-27, BE-28 |
 | `producoes` | `Producao`, `RateioProducao` | produção com rateio (`calcularProducao`), baixa de insumos e entrada de produto acabado, numa transação só; não exporta service | `receitas`, `gastos-indiretos`, `estoque`, `configuracao-custos` | BE-12, BE-26 |
 | `vendas` | `Venda`, `ItemVenda` | vendas com a entidade `Venda` (total, margem e transições de status) e conclusão com baixa de produto acabado (`saidaPorVenda`) na mesma transação; não exporta service | `receitas`, `estoque` | BE-13 |
 
@@ -59,6 +59,7 @@ Schema em `prisma/schema.prisma`, migration inicial `init` (BE-05). Toda tabela 
 | `configuracao_custos` (`ConfiguracaoCustos`) | `configuracao-custos` | `empresa_id` (único) |
 | `canal_venda` (`CanalVenda`) | `canais` | `empresa_id` |
 | `insumo` (`Insumo`) | `insumos` | `empresa_id` |
+| `compra_insumo` (`CompraInsumo`) | `insumos` | `empresa_id`, `insumo_id` (`CASCADE`) |
 | `gasto_indireto` (`GastoIndireto`) | `gastos-indiretos` | `empresa_id` |
 | `receita` (`Receita`) | `receitas` | `empresa_id` |
 | `item_receita` (`ItemReceita`) | `receitas` | `receita_id` (`CASCADE`), `insumo_id` (`RESTRICT` → 409 `INSUMO_EM_USO`) |
@@ -71,7 +72,7 @@ Schema em `prisma/schema.prisma`, migration inicial `init` (BE-05). Toda tabela 
 | `venda` (`Venda`) | `vendas` | `empresa_id` |
 | `item_venda` (`ItemVenda`) | `vendas` | `venda_id` (`CASCADE`), `receita_id` (`RESTRICT`) |
 
-`empresa_id` sem indicação é `RESTRICT` (padrão do Prisma): excluir empresa não é uma funcionalidade. A exclusão de insumo leva junto o saldo e as movimentações de estoque dele, e a de receita leva o saldo e as movimentações de produto acabado (quando não há produção nem venda, que a bloqueiam).
+`empresa_id` sem indicação é `RESTRICT` (padrão do Prisma): excluir empresa não é uma funcionalidade. A exclusão de insumo leva junto o saldo, as movimentações de estoque e as compras dele, e a de receita leva o saldo e as movimentações de produto acabado (quando não há produção nem venda, que a bloqueiam).
 
 **Sem ciclos.** Se A depende de B, B não depende de A. O `estoque` não depende de `insumos`: ele confere a empresa pelo `empresa_id` do próprio registro de estoque (BE-05). Ao criar um módulo ou uma dependência, atualize esta tabela no mesmo PR.
 
