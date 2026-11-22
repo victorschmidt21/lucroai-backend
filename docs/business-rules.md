@@ -139,8 +139,8 @@ custoMedio  = saldo ≤ 0 ? custoCompra
 - A comissão é fração do **preço de venda**, entre 0 e 1, gravada e devolvida sem arredondar.
 - Os padrões ficam em `CANAIS_PADRAO` (`canais/domain/canais.calculos.ts`). Nascem no cadastro da empresa (`CanalVendaService.criarPadrao(empresaId, tx)`, chamado pelo `auth` na transação do cadastro), no seed (que os recria) e, para as empresas que já existiam, na migration `criar_canal_venda`. Todos são editáveis.
 - O Balcão é marcado pela coluna `balcao` (o nome pode mudar), que a API não deixa alterar e que canal criado pelo `POST` nunca tem. Excluir o Balcão → 422 `CANAL_BALCAO_NAO_EXCLUIVEL` "O canal Balcão não pode ser excluído" (`garantirCanalExcluivel`). Desativá-lo é permitido: a issue só proíbe a exclusão.
-- Os outros canais podem ser excluídos (nada os referencia ainda).
-- Taxa do canal no preço (BE-28, `taxaDoCanal`): no Balcão, a `taxaMaquininha` da configuração (a `comissaoPercentual` dele é ignorada); nos outros, a `comissaoPercentual`. Só os canais **ativos** entram em `precos` da receita; para outros módulos, `CanalVendaService` exporta `listarAtivosDaEmpresa(empresaId, tx?)`.
+- Os outros canais podem ser excluídos. As vendas deles ficam com `canalId: null` (FK `SET NULL`, BE-30); o lucro real já gravado não muda.
+- Taxa do canal no preço (BE-28, `taxaDoCanal`): no Balcão, a `taxaMaquininha` da configuração (a `comissaoPercentual` dele é ignorada); nos outros, a `comissaoPercentual`. Só os canais **ativos** entram em `precos` da receita; para outros módulos, `CanalVendaService` exporta `listarAtivosDaEmpresa(empresaId, tx?)` e, desde a BE-30, `buscarParaVenda(canalId?, empresaId)`: o canal informado, ativo ou não (404 `CANAL_VENDA_NAO_ENCONTRADO` se for de outra empresa), ou o Balcão quando omitido.
 
 ## Gastos indiretos e rateio
 
@@ -177,7 +177,7 @@ Cadastro:
 
 Origem: `recipe-service/src/modules/custos/application/services/custo.service.ts` (`calcularReceita`, `calcularItens`, `calcularCustoTotalProducao`, `calcularCustoPorUnidade`, `calcularPrecoSugerido`) e `default-custo-invisivel-result.provider.ts`.
 
-**Muda (BE-27): o custo não é mais gravado.** A receita guarda só a ficha técnica; `custoProducao`, `custoUnitario`, `precoSugerido` e o `custoCalculado` dos itens são calculados **na leitura** (listagem, detalhe, cadastro, edição, custo, simulação, preço de venda e `buscarDaEmpresa`), com os custos de reposição dos insumos (BE-29), os gastos atuais e a configuração de custos da empresa. Mudar o custo de um insumo ou um gasto passa a mudar o custo das receitas na hora.
+**Muda (BE-27): o custo não é mais gravado.** A receita guarda só a ficha técnica; `custoProducao`, `custoUnitario`, `precoSugerido` e o `custoCalculado` dos itens são calculados **na leitura** (listagem, detalhe, cadastro, edição, custo, simulação, preço de venda e `buscarDaEmpresa`), com os custos de reposição dos insumos (BE-29; no `buscarDaEmpresa`, para produção e venda, o custo médio, BE-30), os gastos atuais e a configuração de custos da empresa. Mudar o custo de um insumo ou um gasto passa a mudar o custo das receitas na hora.
 
 **Muda (BE-28): fórmula nova**, igual em todas as telas, que substitui `custo × (1 + margem)` e o custo invisível somado ao lote. Custo de 1 unidade:
 
@@ -214,7 +214,7 @@ Detalhamento na resposta da receita (`custo`): `ingredientesLote` e `gastosMensa
 - **Muda (BE-27):** o lucro é o da receita ou, sem ele, o `lucroPadrao` da empresa. A resposta traz ainda `margemLucro` derivada (`lucro ÷ (1 − lucro)`, o markup equivalente), para o frontend atual; ela é omitida só quando não há preço. **Muda (BE-28):** `precoSugerido` é o preço do Balcão ([preço por canal](#preço-por-canal)), não mais `custo ÷ (1 − lucro)`; a `margemLucro` continua sendo a do lucro configurado (para o formulário reenviá-la sem mudar o lucro), e por isso `custoUnitario × (1 + margemLucro)` só é o `precoSugerido` sem imposto, maquininha nem gastos `PERCENTUAL_VENDA`.
 - Validação do corpo (`create-receita.dto.ts`): nome até 80, `rendimento` inteiro > 0, `quantidade` do item ≥ 0.001, `insumo_id` inteiro > 0. **Muda (BE-09):** a lista de insumos não pode ser vazia (400), os insumos precisam ser da empresa (404 `INSUMO_NAO_ENCONTRADO`), e o nome passa a ser aparado e obrigatório (como o do insumo e o do gasto).
 - Receita inexistente ou de outra empresa → 404 `RECEITA_NAO_ENCONTRADA` "Receita não encontrada". Listagem por `dataCriacao` decrescente (e `id` no empate); itens na ordem em que foram informados.
-- Para outros módulos, `ReceitaService` exporta `buscarDaEmpresa(id, empresaId, tx?)`, que devolve a `Receita` com os itens e, desde a BE-27, `custoProducao` e `custoUnitario` de 1 lote calculados agora (404 se não for da empresa), para as BE-12 e BE-13. Valores sem arredondar (BE-23), não o `ReceitaDto`. Dentro de uma transação, as consultas do custo usam o `tx`. Desde a BE-28 esses valores são os da fórmula nova (com embalagem e perda); a produção continua somando o rateio por cima até a BE-30.
+- Para outros módulos, `ReceitaService` exporta `buscarDaEmpresa(id, empresaId, tx?)`, que devolve a `Receita` com os itens (404 se não for da empresa), para as produções e as vendas. **Muda (BE-30):** em vez de `custoProducao` e `custoUnitario`, devolve `custo` (o `CustoReceita` de 1 lote, pela fórmula acima, mas com o **custo médio** dos insumos no lugar da reposição: é o que já foi gasto) e `basePreco` (imposto, maquininha, gastos `PERCENTUAL_VENDA` e lucro). Valores sem arredondar (BE-23), não o `ReceitaDto`. Dentro de uma transação, as consultas do custo usam o `tx`.
 
 ### Ficha técnica
 
@@ -299,6 +299,7 @@ preco       = custoUnitario ÷ (1 − percentuais)
 - `precos` da receita: um por canal **ativo**, em ordem de criação. `precoSugerido` é sempre o preço do Balcão (taxa da maquininha), mesmo com o canal Balcão desativado, porque é o preço de referência; a simulação o usa como padrão.
 - Composição ("para onde vai cada R$ 1"), cada parte com `valor` (reais por unidade) e `fracao` (do preço): `ingredientes`, `gastosMensais`, `gastosPorUnidade`, `embalagem` e `perdas` (as partes do custo; `fracao = valor ÷ preço`, 0 com preço 0) e `imposto`, `taxaCanal`, `gastosPercentuais` e `lucro` (`valor = fracao × preço`). As partes somam o preço e as frações somam 1. O frontend agrupa como quiser (ex.: embalagem e perdas juntas).
 - Exemplo (critério da BE-28): o pão francês de R$ 0,5822, com imposto 0, maquininha 1,36% e lucro 15%, custa **R$ 0,6961** no Balcão (`0,5822 ÷ 0,8364`); no iFood (15,2%), R$ 0,8341.
+- `calcularPercentuaisSemLucro(canal, { impostoPercentual, taxaMaquininha, gastosPercentuais })` (BE-30): imposto + taxa do canal + gastos `PERCENTUAL_VENDA`, os percentuais sem o lucro, que a [venda](#vendas) desconta no lucro real.
 - Funções puras: `calcularPreco(custoDetalhado, { imposto, taxaCanal, gastosPercentuais, lucro })`, `calcularPrecoNoCanal(custoDetalhado, canal, { impostoPercentual, taxaMaquininha, gastosPercentuais, lucro })` e `taxaDoCanal` (de `canais`). Sem arredondar (BE-23): o `ReceitaDto` arredonda `preco` e `valor` com 4 casas, e `percentuais` e `fracao` com 4.
 
 ### Preço de venda
@@ -338,28 +339,29 @@ saída:   saldo = round6(saldo − quantidade)          // pode ficar negativo
 
 ## Produções
 
-Origem: `operations-service/src/modules/producoes/application/services/producao.service.ts` (`create`).
+Origem: `operations-service/src/modules/producoes/application/services/producao.service.ts` (`create`). **Muda (BE-30): sem gasto duplicado.** O custo da produção é o consumo dos insumos ao **custo médio** mais os gastos mensais pelo uso de forno, cada um **uma vez** por lote:
 
 ```
-gastos          = gasto_indireto_ids omitido → todos os gastos da empresa
-                  gasto_indireto_ids = []    → nenhum gasto
-totalUnidades   = quantidade × receita.rendimento
-custoBase       = receita.custoProducao × quantidade        // custo de 1 lote calculado na hora (BE-27; desde a BE-28 com embalagem e perda), sem arredondar
-rateios         = gastos sem PERCENTUAL_VENDA
-                    .map(g => calcularGastoNoCusto(g, { lotes: quantidade, totalUnidades, capacidadeMensal, usoPorLote: receita.usoPorLote }))
-custoTotal      = custoBase + Σ rateios
-custoUnitario   = totalUnidades > 0 ? custoTotal / totalUnidades : 0
+gastos            = gasto_indireto_ids omitido → todos os gastos da empresa
+                    gasto_indireto_ids = []    → nenhum gasto
+totalUnidades     = quantidade × receita.rendimento
+custoIngredientes = receita.custo.detalhe.ingredientesLote × quantidade     // Σ item.quantidade × insumo.custoMedio (BE-30)
+rateios           = gastos MENSAL
+                      .map(g => g.valor × usoPorLote × quantidade ÷ capacidadeMensal)   // calcularGastoNoCusto
+custoTotal        = custoIngredientes + Σ rateios
+custoUnitario     = totalUnidades > 0 ? custoTotal / totalUnidades : 0
 ```
 
-**Muda (BE-23):** sem o `round2` de hoje; a produção grava os valores exatos e a resposta mostra `custoTotal` e `valorRateado` com 2 casas e `custoUnitario` com 4.
+Exemplo (critério da BE-30): 2 lotes do pão francês (ingredientes de R$ 3,305 por lote, gastos mensais de R$ 2.435, capacidade de 100 fornadas, 1 fornada por lote) custam `6,61 + 2.435 × 2 ÷ 100 = 6,61 + 48,70` = **R$ 55,31**, com os gastos de 2 fornadas uma vez só. Até a BE-29, o custo da receita (que já tinha todos os gastos) era multiplicado pelos lotes e os gastos eram rateados de novo por cima.
 
-- `quantidade` é o número de **lotes** (inteiro > 0).
-- O `custoProducao` da receita já contém o custo invisível de 1 lote com todos os gastos (lacuna 18). Por isso os gastos rateados na produção entram **de novo** no `custoTotal`. É o comportamento atual e fica mantido até a BE-30, que tira a duplicidade.
-- **Muda (BE-26):** cada gasto é rateado pelo tipo, com a `capacidadeMensal` da configuração de custos da empresa (buscada na mesma transação): o mensal não entra mais inteiro. `PERCENTUAL_VENDA` é fração do preço, não custo, e não gera rateio.
-- Efeitos, **numa transação só** no monolito (BE-12): grava a produção e os rateios, dá baixa nos insumos (seção anterior) e dá entrada de `totalUnidades` no estoque de produto acabado da receita. Hoje são chamadas HTTP e eventos sem compensação.
+- **Muda (BE-30):** só os gastos `MENSAL` geram rateio. `POR_UNIDADE`, embalagem e perda são custos da unidade **vendida** e ficam no custo da receita e no da venda; `PERCENTUAL_VENDA` é fração do preço, não custo. Por isso o `custoUnitario` da produção é menor que o da receita: ele mede o que o lote custou para sair do forno.
+- **Muda (BE-30):** os ingredientes entram ao `custoMedio` dos insumos ([Insumos](#insumos)), não à reposição, que só forma o preço. `RateioProducao` continua: guarda a parte de cada gasto mensal, e o frontend mostra os rateios.
+- **Muda (BE-23):** sem o `round2` de hoje; a produção grava os valores exatos e a resposta mostra `custoTotal` e `valorRateado` com 2 casas e `custoUnitario` com 4.
+- `quantidade` é o número de **lotes** (inteiro > 0). `usoPorLote` vem da [ficha técnica](#ficha-técnica) e `capacidadeMensal` da [configuração de custos](#configuração-de-custos) (buscada na mesma transação).
+- Efeitos, **numa transação só** no monolito (BE-12): grava a produção e os rateios, dá baixa nos insumos (saldo negativo continua permitido, lacuna 10) e dá entrada de `totalUnidades` no estoque de produto acabado da receita. Hoje são chamadas HTTP e eventos sem compensação.
 - **Muda (BE-12):** a receita e os gastos precisam ser da empresa do token (lacuna 11); a produção grava `totalUnidades` (lacuna 23) e a descrição do gasto em cada rateio.
 - **Muda (BE-12):** id repetido em `gasto_indireto_ids` conta uma vez (`buscarVariosDaEmpresa`); hoje cada repetição soma o rateio de novo.
-- Função pura `calcularProducao(receita, lotes, gastos, capacidadeMensal)` em `producoes/domain/producoes.calculos.ts`, com o `calcularGastoNoCusto` da BE-26 e o `usoPorLote` da receita (BE-27). Os rateios saem na ordem dos gastos (com o id omitido, a de `GET /gastos-indiretos`: id decrescente).
+- Função pura `calcularProducao({ rendimento, ingredientesLote, usoPorLote? }, lotes, gastos, capacidadeMensal)` em `producoes/domain/producoes.calculos.ts`, com o `calcularGastoNoCusto` da BE-26. Os rateios saem na ordem dos gastos (com o id omitido, a de `GET /gastos-indiretos`: id decrescente).
 - Uma falha em qualquer passo (ex.: insumo sem registro de estoque → 404) desfaz tudo: produção, rateios, baixas e entrada de produto acabado.
 
 ## Estoque de produto acabado
@@ -379,26 +381,34 @@ saída por venda:      se saldo < quantidade → erro "Estoque insuficiente..."
 
 ## Vendas
 
-Origem: `sales-service/src/modules/vendas/application/services/venda.service.ts` (`create`, `atualizarStatus`) e `create-venda.dto.ts`.
+Origem: `sales-service/src/modules/vendas/application/services/venda.service.ts` (`create`, `atualizarStatus`) e `create-venda.dto.ts`. **Muda (BE-30): venda por canal com lucro real.**
 
 ```
-custoUnitario    = receita.custoUnitario                        // snapshot do custo calculado na hora da venda (BE-27)
-margemRealizada  = custoUnitario != null ? (preco − custoUnitario) / preco : null
-total            = Σ quantidade × preco
-status inicial   = PENDENTE
+canal               = canal_id ?? Balcão da empresa                             // CanalVendaService.buscarParaVenda
+custoUnitario       = receita.custo.custoUnitario                               // fórmula da receita com o custo médio dos insumos (BE-30)
+percentuaisSemLucro = impostoPercentual + taxaDoCanal(canal) + Σ gastos PERCENTUAL_VENDA   // calcularPercentuaisSemLucro
+lucroReal           = custoUnitario != null ? 1 − percentuaisSemLucro − custoUnitario ÷ preco : null
+margemRealizada     = custoUnitario != null ? (preco − custoUnitario) / preco : null       // legada
+total               = Σ quantidade × preco
+status inicial      = PENDENTE
 ```
 
-**Muda (BE-23):** a venda grava os valores exatos (inclusive o `custoUnitario` exato da receita); a resposta mostra `total` com 2 casas e `custoUnitario` e `margemRealizada` com 4.
+- O lucro real está na **mesma base do lucro do preço** (fração do preço): vendido pelo preço sugerido do canal, ele é o lucro configurado. Exemplo (critério da BE-30): o pão francês de R$ 0,5822 vendido no Balcão pelo preço sugerido (R$ 0,6961, maquininha de 1,36%) tem lucro real de **15%**; no iFood (15,2%) pelo mesmo preço, `1 − 0,152 − 0,8364` = **1,16%**. Com o preço digitado em centavos (R$ 0,70), o Balcão dá 15,47%.
+- O custo usa o **custo médio** dos insumos (o que já foi pago), e o preço sugerido usa a reposição: depois de uma alta de preço, vender pelo preço novo mostra o lucro real maior enquanto o estoque antigo dura.
+- `canal_id` é opcional (Balcão se omitido); qualquer canal da empresa vale, ativo ou não. Canal de outra empresa → 404 `CANAL_VENDA_NAO_ENCONTRADO`. A venda grava o `canalId` (`SET NULL` se o canal for excluído) e cada item grava o `lucroReal`, sem arredondar; os dois são `null` nas vendas anteriores à BE-30.
+- `margemRealizada` continua no contrato (o frontend atual a valida) e sai quando o frontend usar o lucro real (BE-33).
+
+**Muda (BE-23):** a venda grava os valores exatos (inclusive o `custoUnitario` exato da receita); a resposta mostra `total` com 2 casas e `custoUnitario`, `margemRealizada` e `lucroReal` com 4.
 
 - Item: `receita_id` inteiro > 0, `quantidade` inteiro > 0, `preco_unitario_real` > 0 com até 2 casas.
-- Receita sem `custoUnitario` → `custoUnitario` e `margemRealizada` do item ficam `null` (a venda é registrada mesmo assim). Desde a BE-27 o custo é sempre calculado, então isso só acontece com vendas antigas. A margem pode ser negativa (preço abaixo do custo).
+- Receita sem `custoUnitario` → `custoUnitario`, `margemRealizada` e `lucroReal` do item ficam `null` (a venda é registrada mesmo assim). Desde a BE-27 o custo é sempre calculado, então isso só acontece com vendas antigas. A margem e o lucro real podem ser negativos (preço abaixo do custo).
 - Transições: só `PENDENTE` muda, para `CONCLUIDA` ou `CANCELADA`. Venda `CONCLUIDA` ou `CANCELADA` → 422 `VENDA_FINALIZADA` "Venda já finalizada não pode ser alterada". **Muda (BE-13):** o status passa de 400 para 422, e `PENDENTE` → `PENDENTE` (hoje aceito sem efeito) dá 422 `TRANSICAO_INVALIDA` "Venda pendente só pode ser concluída ou cancelada".
 - O registro não confere o estoque (lacuna 24, mantida): a barreira é a conclusão.
 - **Muda (BE-13):** concluir dá baixa de cada item no produto acabado **na mesma transação** da mudança de status. Sem saldo → 422 "Estoque insuficiente..." e a venda continua `PENDENTE` (lacuna 9). Hoje a baixa é assíncrona e a venda fica `CONCLUIDA` mesmo sem saldo.
 - **Muda (BE-13):** `itens` não pode ser vazio (lacuna 25); a receita precisa ser da empresa (lacuna 26); filtros inválidos dão 400 (lacuna 8).
 - A conclusão percorre os itens na ordem em que foram gravados, chamando `EstoqueProdutoAcabadoService.saidaPorVenda` (trava a linha do saldo; `SAIDA/VENDA`, `referenciaId` = id da venda, uma movimentação por item). Vários itens da mesma receita somam: o segundo já vê o saldo descontado do primeiro. A mudança de status usa `UPDATE ... WHERE status = 'PENDENTE'`: duas conclusões simultâneas da mesma venda não dão baixa duas vezes (a segunda recebe `VENDA_FINALIZADA`). Cancelar não mexe no estoque.
 - Listagem: filtros `status`, `dataInicio` (`dataVenda ≥`) e `dataFim` (`dataVenda ≤`), da mais recente para a mais antiga (`prisma-venda.repository.ts`, `findAll`); o `id` desempata. **Muda (BE-13, lacuna 7):** as datas precisam ter data, hora e fuso (`Z` ou `±hh:mm`), como a web envia (`toISOString()`); só a data → 400.
-- `Venda` é a única entidade de classe do projeto (BE-13, `vendas/domain/venda.entity.ts`): `Venda.nova` (margem, total e status inicial), `calcularMargemRealizada`, `calcularTotal` e `alterarStatus` (transições) ficam nela.
+- `Venda` é a única entidade de classe do projeto (BE-13, `vendas/domain/venda.entity.ts`): `Venda.nova(empresaId, itens, { canalId, percentuaisSemLucro })` (margem, lucro real, total e status inicial), `calcularMargemRealizada`, `calcularLucroReal` (BE-30), `calcularTotal` e `alterarStatus` (transições) ficam nela.
 
 ## Lacunas do backend atual
 
@@ -423,7 +433,7 @@ A lista numerada está em [`lucroai-frontend/docs/api-integration.md#lacunas-do-
 | 15 | `ReceitaCusto` em `snake_case` | mantida | BE-10 | é o contrato do frontend |
 | 16 | links HATEOAS incorretos | corrigida | BE-04 | sem envelope: a resposta é o JSON do recurso |
 | 17 | seeds com `EMPRESA_ID = 1` fixo | corrigida | BE-14 | um seed só, pelos ids reais |
-| 18 | custo invisível soma todos os gastos da empresa | corrigida em parte | BE-09, BE-26, BE-27 | continua somando todos os gastos (é a regra do cálculo novo), mas pelo tipo: o gasto mensal é dividido pela capacidade mensal (vezes o uso de forno da receita, BE-27) e não entra mais inteiro em cada lote (BE-26); a duplicidade na produção sai na BE-30. O seed grava com a mesma regra, então seed e API batem |
+| 18 | custo invisível soma todos os gastos da empresa | corrigida em parte | BE-09, BE-26, BE-27 | continua somando todos os gastos (é a regra do cálculo novo), mas pelo tipo: o gasto mensal é dividido pela capacidade mensal (vezes o uso de forno da receita, BE-27) e não entra mais inteiro em cada lote (BE-26); a duplicidade na produção saiu na BE-30 (a produção soma só os ingredientes e os gastos mensais do forno, uma vez). O seed grava com a mesma regra, então seed e API batem |
 | 19 | `GET /estoque/insumos/:id` de insumo inexistente → 404 | mantida | BE-11 | é o comportamento certo (inexistente ou de outra empresa) |
 | 20 | preço de venda sem arredondamento | corrigida | BE-10, BE-23 | 4 casas na resposta (`round4`); a BE-10 usava `round2` |
 | 21 | `PUT /receitas/:id` não remove a margem | corrigida | BE-09, BE-27 | a BE-09 fazia `margem_lucro: null` limpar margem e preço sugerido; desde a BE-27 a margem não é gravada, e `null` volta ao lucro padrão da empresa |
