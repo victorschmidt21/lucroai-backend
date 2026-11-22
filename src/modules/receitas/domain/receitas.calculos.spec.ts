@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { round4 } from '../../../shared/domain/arredondamento.js';
 import type { GastoParaCusto } from '../../gastos-indiretos/domain/gastos-indiretos.calculos.js';
 import {
   calcularCustoInvisivel,
   calcularCustoItem,
   calcularCustoReceita,
-  calcularPrecoSugerido,
+  calcularCustoUnitario,
+  calcularPreco,
+  calcularPrecoNoCanal,
   calcularPrecoVenda,
   FICHA_TECNICA_PADRAO,
   lucroDaMargem,
@@ -12,6 +15,9 @@ import {
   margemDoLucro,
   resolverFichaTecnica,
   simularCenario,
+  somarGastosMensaisLote,
+  somarGastosPercentuais,
+  somarGastosPorUnidade,
   validarFichaTecnica,
 } from './receitas.calculos.js';
 
@@ -98,23 +104,222 @@ describe('calcularCustoInvisivel', () => {
   });
 });
 
-describe('calcularPrecoSugerido', () => {
-  it('lucro sobre o preço (BE-27): custo ÷ (1 − lucro), sem arredondar', () => {
-    // 0,85 ÷ 0,85 = 1: o lucro de R$ 0,15 é 15% do preço
-    expect(calcularPrecoSugerido(0.85, 0.15)).toBeCloseTo(1, P);
-    expect(calcularPrecoSugerido(0.81, 0.5)).toBeCloseTo(1.62, P);
+// Critério de aceite da BE-28: pão francês com ingredientes de R$ 3,305,
+// rendimento 50, gastos mensais de R$ 2.435, capacidade de 100 fornadas, uso
+// de 1 fornada, perda de 5%, imposto 0, maquininha 1,36% e lucro 15%.
+const gastosMensaisPao: GastoParaCusto[] = [
+  { valor: 450, tipo: 'MENSAL' },
+  { valor: 1800, tipo: 'MENSAL' },
+  { valor: 185, tipo: 'MENSAL' },
+];
+const basePao = {
+  impostoPercentual: 0,
+  taxaMaquininha: 0.0136,
+  gastosPercentuais: 0,
+  lucro: 0.15,
+};
+const custoPao = () =>
+  calcularCustoReceita({
+    itens: paoFrances,
+    rendimento: 50,
+    usoPorLote: 1,
+    embalagemPorUnidade: 0,
+    perdaPercentual: 0.05,
+    gastos: gastosMensaisPao,
+    capacidadeMensal: 100,
   });
 
-  it('sem lucro é null', () => {
-    expect(calcularPrecoSugerido(0.81, null)).toBeNull();
+describe('somarGastos* (BE-28)', () => {
+  it('mensais de 1 lote: Σ MENSAL × usoPorLote ÷ capacidade', () => {
+    expect(somarGastosMensaisLote(gastosSeed, 1, 100)).toBeCloseTo(24.35, P);
+    expect(somarGastosMensaisLote(gastosSeed, 45, 6000)).toBeCloseTo(
+      (2435 * 45) / 6000,
+      P,
+    );
   });
 
-  it('lucro 0 mantém o custo', () => {
-    expect(calcularPrecoSugerido(0.81, 0)).toBe(0.81);
+  it('por unidade e percentuais só somam o próprio tipo', () => {
+    expect(somarGastosPorUnidade(gastosSeed)).toBeCloseTo(0.1, P);
+    expect(somarGastosPercentuais(gastosSeed)).toBeCloseTo(0.12, P);
+    expect(somarGastosPorUnidade([])).toBe(0);
+    expect(somarGastosPercentuais([])).toBe(0);
+  });
+});
+
+describe('calcularCustoUnitario (BE-28)', () => {
+  it('((ingredientes + mensais) ÷ rendimento + embalagem + por unidade) ÷ (1 − perda)', () => {
+    const d = calcularCustoUnitario({
+      ingredientesLote: 10,
+      gastosMensaisLote: 5,
+      rendimento: 10,
+      embalagemPorUnidade: 0.3,
+      gastosPorUnidade: 0.2,
+      perdaPercentual: 0.2,
+    });
+    // (1 + 0,5 + 0,3 + 0,2) ÷ 0,8 = 2,5
+    expect(d).toEqual({
+      ingredientesLote: 10,
+      gastosMensaisLote: 5,
+      ingredientes: 1,
+      gastosMensais: 0.5,
+      gastosPorUnidade: 0.2,
+      embalagem: 0.3,
+      perdas: expect.closeTo(0.5, P),
+      custoUnitario: expect.closeTo(2.5, P),
+    });
   });
 
-  it('lucro ≥ 1 não tem preço', () => {
-    expect(calcularPrecoSugerido(0.81, 1)).toBeNull();
+  it('sem perda, perdas é 0', () => {
+    const d = calcularCustoUnitario({
+      ingredientesLote: 3,
+      gastosMensaisLote: 0,
+      rendimento: 3,
+      embalagemPorUnidade: 0,
+      gastosPorUnidade: 0,
+      perdaPercentual: 0,
+    });
+    expect(d.custoUnitario).toBe(1);
+    expect(d.perdas).toBe(0);
+  });
+
+  it('pão francês do critério de aceite: R$ 0,5822', () => {
+    const r = custoPao();
+    expect(r.detalhe.ingredientesLote).toBeCloseTo(3.305, P);
+    expect(r.detalhe.gastosMensaisLote).toBeCloseTo(24.35, P);
+    // (3,305 + 24,35) ÷ 50 ÷ 0,95
+    expect(r.custoUnitario).toBeCloseTo(27.655 / 50 / 0.95, P);
+    expect(round4(r.custoUnitario)).toBe(0.5822);
+  });
+});
+
+describe('calcularPreco (BE-28)', () => {
+  // (0,6 + 0,1 + 0,05 + 0,05) ÷ 0,8 = 1
+  const custo = calcularCustoUnitario({
+    ingredientesLote: 6,
+    gastosMensaisLote: 1,
+    rendimento: 10,
+    embalagemPorUnidade: 0.05,
+    gastosPorUnidade: 0.05,
+    perdaPercentual: 0.2,
+  });
+  const p = {
+    imposto: 0.06,
+    taxaCanal: 0.15,
+    gastosPercentuais: 0.04,
+    lucro: 0.25,
+  };
+
+  it('custo ÷ (1 − imposto − taxa − % de venda − lucro)', () => {
+    const r = calcularPreco(custo, p);
+    expect(r.percentuais).toBeCloseTo(0.5, P);
+    expect(r.preco).toBeCloseTo(2, P);
+    expect(r.motivo).toBeNull();
+  });
+
+  it('composição: as partes em reais somam o preço e as frações somam 1', () => {
+    const r = calcularPreco(custo, p);
+    const parte = (valor: number, fracao: number) => ({
+      valor: expect.closeTo(valor, P),
+      fracao: expect.closeTo(fracao, P),
+    });
+    expect(r.composicao).toEqual({
+      ingredientes: parte(0.6, 0.3),
+      gastosMensais: parte(0.1, 0.05),
+      gastosPorUnidade: parte(0.05, 0.025),
+      embalagem: parte(0.05, 0.025),
+      perdas: parte(0.2, 0.1),
+      imposto: parte(0.12, 0.06),
+      taxaCanal: parte(0.3, 0.15),
+      gastosPercentuais: parte(0.08, 0.04),
+      lucro: parte(0.5, 0.25),
+    });
+    const partes = Object.values(r.composicao ?? {});
+    expect(partes.reduce((t, x) => t + x.valor, 0)).toBeCloseTo(2, P);
+    expect(partes.reduce((t, x) => t + x.fracao, 0)).toBeCloseTo(1, P);
+  });
+
+  it('lucro ÷ preço é exatamente o lucro configurado', () => {
+    const r = calcularPreco(custoPao().detalhe, {
+      imposto: 0,
+      taxaCanal: 0.0136,
+      gastosPercentuais: 0,
+      lucro: 0.15,
+    });
+    expect((r.composicao?.lucro.valor ?? 0) / (r.preco ?? 1)).toBeCloseTo(
+      0.15,
+      12,
+    );
+  });
+
+  it.each([
+    { imposto: 0.1, taxaCanal: 0.3, gastosPercentuais: 0.2, lucro: 0.4 },
+    { imposto: 0.3, taxaCanal: 0.4, gastosPercentuais: 0.15, lucro: 0.15 },
+  ])('percentuais ≥ 100% → sem preço, com o motivo', (percentuais) => {
+    expect(calcularPreco(custo, percentuais)).toEqual({
+      percentuais: expect.any(Number),
+      preco: null,
+      motivo: 'PERCENTUAIS_ACIMA_DE_100',
+      composicao: null,
+    });
+  });
+
+  it('custo 0 dá preço 0, sem divisão por zero na composição', () => {
+    const zero = calcularCustoUnitario({
+      ingredientesLote: 0,
+      gastosMensaisLote: 0,
+      rendimento: 1,
+      embalagemPorUnidade: 0,
+      gastosPorUnidade: 0,
+      perdaPercentual: 0,
+    });
+    const r = calcularPreco(zero, p);
+    expect(r.preco).toBe(0);
+    expect(r.composicao?.ingredientes).toEqual({ valor: 0, fracao: 0 });
+  });
+});
+
+describe('calcularPrecoNoCanal (BE-28)', () => {
+  it('pão francês no Balcão: R$ 0,6961, com a taxa da maquininha', () => {
+    const r = calcularPrecoNoCanal(
+      custoPao().detalhe,
+      { balcao: true, comissaoPercentual: 0.5 },
+      basePao,
+    );
+    expect(r.percentuais).toBeCloseTo(0.1636, P);
+    expect(round4(r.preco ?? 0)).toBe(0.6961);
+    expect(r.composicao?.lucro.fracao).toBe(0.15);
+    expect(r.composicao?.taxaCanal.fracao).toBe(0.0136);
+  });
+
+  it('nos outros canais a taxa é a comissão', () => {
+    const r = calcularPrecoNoCanal(
+      custoPao().detalhe,
+      { balcao: false, comissaoPercentual: 0.152 },
+      basePao,
+    );
+    // 0,58221 ÷ (1 − 0,152 − 0,15)
+    expect(r.preco).toBeCloseTo(27.655 / 50 / 0.95 / 0.698, P);
+  });
+
+  it('canal com percentuais ≥ 100% não tem preço', () => {
+    const r = calcularPrecoNoCanal(
+      custoPao().detalhe,
+      { balcao: false, comissaoPercentual: 0.85 },
+      basePao,
+    );
+    expect(r).toMatchObject({
+      preco: null,
+      motivo: 'PERCENTUAIS_ACIMA_DE_100',
+    });
+  });
+
+  it('gastos PERCENTUAL_VENDA e imposto entram nos percentuais', () => {
+    const r = calcularPrecoNoCanal(
+      custoPao().detalhe,
+      { balcao: true, comissaoPercentual: 0 },
+      { ...basePao, impostoPercentual: 0.06, gastosPercentuais: 0.12 },
+    );
+    expect(r.percentuais).toBeCloseTo(0.3436, P);
   });
 });
 
@@ -126,7 +331,6 @@ describe('calcularCustoReceita', () => {
       calcularCustoReceita({
         itens: paoFrances,
         rendimento: 50,
-        lucroPercentual: lucroDaMargem(0.6),
         gastos: [],
         capacidadeMensal: CAPACIDADE,
       }),
@@ -150,7 +354,10 @@ describe('calcularCustoReceita', () => {
       custoInvisivel: 0,
       custoProducao: expect.closeTo(3.305, P),
       custoUnitario: expect.closeTo(0.0661, P),
-      precoSugerido: expect.closeTo(0.10576, P),
+      detalhe: expect.objectContaining({
+        ingredientesLote: expect.closeTo(3.305, P),
+        custoUnitario: expect.closeTo(0.0661, P),
+      }),
     });
   });
 
@@ -158,14 +365,12 @@ describe('calcularCustoReceita', () => {
     const r = calcularCustoReceita({
       itens: paoFrances,
       rendimento: 50,
-      lucroPercentual: lucroDaMargem(0.6),
       gastos: gastosSeed,
       capacidadeMensal: CAPACIDADE,
     });
     expect(r.custoInvisivel).toBeCloseTo(29.35, P);
     expect(r.custoProducao).toBeCloseTo(32.655, P);
     expect(r.custoUnitario).toBeCloseTo(0.6531, P);
-    expect(r.precoSugerido).toBeCloseTo(1.04496, P);
   });
 
   it('Bolo de Chocolate do seed com gastos', () => {
@@ -180,7 +385,6 @@ describe('calcularCustoReceita', () => {
         { insumoId: 6, quantidade: 10, custoUnitario: 8.5 / 500 },
       ],
       rendimento: 12,
-      lucroPercentual: lucroDaMargem(0.5),
       gastos: gastosSeed,
       capacidadeMensal: CAPACIDADE,
     });
@@ -192,19 +396,23 @@ describe('calcularCustoReceita', () => {
     expect(r.custoInvisivel).toBeCloseTo(25.55, P);
     expect(r.custoProducao).toBeCloseTo(35.25, P);
     expect(r.custoUnitario).toBeCloseTo(2.9375, P);
-    expect(r.precoSugerido).toBeCloseTo(4.40625, P);
   });
 
-  it('sem lucro não tem preço sugerido', () => {
+  it('embalagem e perda entram no custo unitário e no de produção (BE-28)', () => {
     const r = calcularCustoReceita({
       itens: paoFrances,
       rendimento: 50,
-      lucroPercentual: null,
+      embalagemPorUnidade: 0.05,
+      perdaPercentual: 0.05,
       gastos: [],
       capacidadeMensal: CAPACIDADE,
+      lotes: 2,
     });
-    expect(r.custoUnitario).toBeCloseTo(0.0661, P);
-    expect(r.precoSugerido).toBeNull();
+    // (3,305 ÷ 50 + 0,05) ÷ 0,95
+    expect(r.custoUnitario).toBeCloseTo(0.1161 / 0.95, P);
+    expect(r.custoProducao).toBeCloseTo((0.1161 / 0.95) * 100, P);
+    expect(r.custoIngredientes).toBeCloseTo(6.61, P);
+    expect(r.detalhe.ingredientesLote).toBeCloseTo(3.305, P);
   });
 
   it.each([0, -1])('rendimento %d → 400 RENDIMENTO_INVALIDO', (rendimento) => {
@@ -212,7 +420,6 @@ describe('calcularCustoReceita', () => {
       calcularCustoReceita({
         itens: paoFrances,
         rendimento,
-        lucroPercentual: null,
         gastos: [],
         capacidadeMensal: CAPACIDADE,
       }),
@@ -232,7 +439,6 @@ describe('calcularCustoReceita para N lotes', () => {
     const r = calcularCustoReceita({
       itens: paoFrances,
       rendimento: 50,
-      lucroPercentual: lucroDaMargem(0.6),
       gastos: gastosSeed,
       capacidadeMensal: CAPACIDADE,
     });
@@ -244,7 +450,6 @@ describe('calcularCustoReceita para N lotes', () => {
     const r = calcularCustoReceita({
       itens: paoFrances,
       rendimento: 50,
-      lucroPercentual: lucroDaMargem(0.6),
       gastos: [],
       capacidadeMensal: CAPACIDADE,
       lotes: 3,
@@ -276,7 +481,6 @@ describe('calcularCustoReceita para N lotes', () => {
     const r = calcularCustoReceita({
       itens: paoFrances,
       rendimento: 50,
-      lucroPercentual: lucroDaMargem(0.6),
       gastos: gastosSeed,
       capacidadeMensal: CAPACIDADE,
       lotes: 3,
@@ -298,7 +502,6 @@ describe('calcularCustoReceita para N lotes', () => {
         { insumoId: 6, quantidade: 10, custoUnitario: 8.5 / 500 },
       ],
       rendimento: 12,
-      lucroPercentual: lucroDaMargem(0.5),
       gastos: [
         { valor: 12.5, tipo: 'MENSAL' },
         { valor: 0.015, tipo: 'POR_UNIDADE' },
@@ -458,7 +661,6 @@ describe('calcularCustoInvisivel com uso de forno (BE-27)', () => {
       itens: paoFrances,
       rendimento: 50,
       usoPorLote: 0.5,
-      lucroPercentual: null,
       gastos: [{ valor: 2000, tipo: 'MENSAL' }],
       capacidadeMensal: CAPACIDADE,
       lotes: 2,
@@ -583,10 +785,7 @@ describe('compatibilidade com margem_lucro', () => {
     expect(lucroDaMargem(0)).toBe(0);
     expect(margemDoLucro(1)).toBeNull();
     // custo × (1 + margem) = custo ÷ (1 − lucro)
-    expect(calcularPrecoSugerido(0.81, lucroDaMargem(0.5))).toBeCloseTo(
-      1.215,
-      P,
-    );
+    expect(0.81 / (1 - lucroDaMargem(0.5))).toBeCloseTo(1.215, P);
   });
 
   it('lucro_percentual tem prioridade sobre margem_lucro', () => {

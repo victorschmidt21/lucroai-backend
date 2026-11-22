@@ -317,7 +317,28 @@ describe('Contrato com o frontend (e2e)', () => {
       expect(validar(z.array(receitaSchema), lista.body)).toHaveLength(2);
 
       const uma = await comA('get', `/receitas/${receitaId}`).expect(200);
-      validar(receitaSchema, uma.body);
+      const lida = validar(receitaSchema, uma.body);
+      // BE-28 (aditivos): detalhamento do custo e um preço por canal ativo;
+      // o `precoSugerido` é o do Balcão. Canal com percentuais ≥ 100% vem
+      // sem preço e com o motivo.
+      const caro = await comA('post', '/canais')
+        .send({ nome: 'Caro', comissaoPercentual: 0.9 })
+        .expect(201);
+      const comCanais = await comA('get', `/receitas/${receitaId}`).expect(200);
+      expect(comCanais.body).toMatchObject({
+        custo: { unitario: lida.custoUnitario },
+        precos: [
+          { balcao: true, preco: lida.precoSugerido, motivo: null },
+          {
+            canal: 'Caro',
+            balcao: false,
+            preco: null,
+            motivo: 'PERCENTUAIS_ACIMA_DE_100',
+            composicao: null,
+          },
+        ],
+      });
+      await comA('delete', `/canais/${caro.body.id}`).expect(204);
 
       const editada = await comA('put', `/receitas/${receitaId}`)
         .send({ margem_lucro: 0.5 })

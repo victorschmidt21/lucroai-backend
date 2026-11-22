@@ -31,7 +31,9 @@ import { calcularCustoUnitario } from '../src/modules/insumos/domain/insumos.cal
 import { calcularProducao } from '../src/modules/producoes/domain/producoes.calculos.js';
 import {
   calcularCustoReceita,
+  calcularPrecoNoCanal,
   lucroDaMargem,
+  somarGastosPercentuais,
 } from '../src/modules/receitas/domain/receitas.calculos.js';
 import { Venda } from '../src/modules/vendas/domain/venda.entity.js';
 
@@ -478,10 +480,20 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
     const custo = calcularCustoReceita({
       itens,
       rendimento: def.rendimento,
-      lucroPercentual,
       gastos,
       capacidadeMensal: CONFIGURACAO_CUSTOS_PADRAO.capacidadeMensal,
     });
+    // Preço sugerido do Balcão (BE-28), o que a API mostra em `precoSugerido`.
+    const precoBalcao = calcularPrecoNoCanal(
+      custo.detalhe,
+      { balcao: true, comissaoPercentual: 0 },
+      {
+        impostoPercentual: CONFIGURACAO_CUSTOS_PADRAO.impostoPercentual,
+        taxaMaquininha: CONFIGURACAO_CUSTOS_PADRAO.taxaMaquininha,
+        gastosPercentuais: somarGastosPercentuais(gastos),
+        lucro: lucroPercentual,
+      },
+    );
     const receita = await tx.receita.create({
       data: {
         empresaId,
@@ -503,7 +515,7 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
       rendimento: def.rendimento,
       custoProducao: custo.custoProducao,
       custoUnitario: custo.custoUnitario,
-      precoSugerido: custo.precoSugerido ?? 0,
+      precoSugerido: precoBalcao.preco ?? 0,
       itens: custo.itens,
     });
   }

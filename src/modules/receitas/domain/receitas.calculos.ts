@@ -4,6 +4,10 @@ import {
   InvalidInputError,
 } from '../../../shared/domain/errors/domain.error.js';
 import {
+  type CanalParaTaxa,
+  taxaDoCanal,
+} from '../../canais/domain/canais.calculos.js';
+import {
   calcularGastoNoCusto,
   type GastoParaCusto,
 } from '../../gastos-indiretos/domain/gastos-indiretos.calculos.js';
@@ -151,16 +155,230 @@ export interface ItemCalculado {
   custoCalculado: number;
 }
 
+/**
+ * Soma dos gastos `MENSAL` que cabem em 1 lote (BE-28):
+ * `Σ valor × usoPorLote ÷ capacidadeMensal`.
+ */
+export function somarGastosMensaisLote(
+  gastos: GastoParaCusto[],
+  usoPorLote: number,
+  capacidadeMensal: number,
+): number {
+  return gastos
+    .filter((gasto) => gasto.tipo === 'MENSAL')
+    .reduce(
+      (total, gasto) =>
+        total +
+        calcularGastoNoCusto(gasto, {
+          lotes: 1,
+          totalUnidades: 0,
+          capacidadeMensal,
+          usoPorLote,
+        }),
+      0,
+    );
+}
+
+/** Soma dos gastos `POR_UNIDADE` (reais por unidade, BE-28). */
+export function somarGastosPorUnidade(gastos: GastoParaCusto[]): number {
+  return gastos
+    .filter((gasto) => gasto.tipo === 'POR_UNIDADE')
+    .reduce((total, gasto) => total + gasto.valor, 0);
+}
+
+/** Soma dos gastos `PERCENTUAL_VENDA` (fração do preço, BE-28). */
+export function somarGastosPercentuais(gastos: GastoParaCusto[]): number {
+  return gastos
+    .filter((gasto) => gasto.tipo === 'PERCENTUAL_VENDA')
+    .reduce((total, gasto) => total + gasto.valor, 0);
+}
+
+export interface CustoUnitarioInput {
+  /** `Σ quantidade × custo do insumo` de 1 lote. */
+  ingredientesLote: number;
+  /** `somarGastosMensaisLote`. */
+  gastosMensaisLote: number;
+  /** Unidades boas por lote, > 0. */
+  rendimento: number;
+  embalagemPorUnidade: number;
+  /** `somarGastosPorUnidade`. */
+  gastosPorUnidade: number;
+  /** De 0 até menos de 1 (`validarFichaTecnica`). */
+  perdaPercentual: number;
+}
+
+/**
+ * Custo de 1 unidade e de onde ele vem (BE-28). As partes por unidade
+ * (`ingredientes`, `gastosMensais`, `gastosPorUnidade`, `embalagem` e
+ * `perdas`) somam o `custoUnitario`.
+ */
+export interface CustoUnitarioDetalhado {
+  ingredientesLote: number;
+  gastosMensaisLote: number;
+  ingredientes: number;
+  gastosMensais: number;
+  gastosPorUnidade: number;
+  embalagem: number;
+  /** O que a perda acrescenta: `custoUnitario − custo sem perda`. */
+  perdas: number;
+  custoUnitario: number;
+}
+
+/**
+ * **Muda (BE-28):**
+ * `((ingredientesLote + gastosMensaisLote) ÷ rendimento + embalagem +
+ * gastosPorUnidade) ÷ (1 − perda)`. Sem arredondar (BE-23).
+ */
+export function calcularCustoUnitario(
+  input: CustoUnitarioInput,
+): CustoUnitarioDetalhado {
+  const ingredientes = input.ingredientesLote / input.rendimento;
+  const gastosMensais = input.gastosMensaisLote / input.rendimento;
+  const semPerda =
+    ingredientes +
+    gastosMensais +
+    input.embalagemPorUnidade +
+    input.gastosPorUnidade;
+  const custoUnitario = semPerda / (1 - input.perdaPercentual);
+  return {
+    ingredientesLote: input.ingredientesLote,
+    gastosMensaisLote: input.gastosMensaisLote,
+    ingredientes,
+    gastosMensais,
+    gastosPorUnidade: input.gastosPorUnidade,
+    embalagem: input.embalagemPorUnidade,
+    perdas: custoUnitario - semPerda,
+    custoUnitario,
+  };
+}
+
+/** Frações do **preço** que o preço de um canal precisa cobrir (BE-28). */
+export interface PercentuaisPreco {
+  imposto: number;
+  /** Do Balcão: `taxaMaquininha`; dos outros: `comissaoPercentual`. */
+  taxaCanal: number;
+  /** `somarGastosPercentuais`. */
+  gastosPercentuais: number;
+  lucro: number;
+}
+
+export const MOTIVO_PERCENTUAIS_ACIMA_DE_100 = 'PERCENTUAIS_ACIMA_DE_100';
+export type MotivoSemPreco = typeof MOTIVO_PERCENTUAIS_ACIMA_DE_100;
+
+/** Uma parte do preço, em reais e em fração do preço. */
+export interface ParteDoPreco {
+  valor: number;
+  fracao: number;
+}
+
+/** "Para onde vai cada R$ 1" do preço: as partes somam o preço (e 1). */
+export interface ComposicaoPreco {
+  ingredientes: ParteDoPreco;
+  gastosMensais: ParteDoPreco;
+  gastosPorUnidade: ParteDoPreco;
+  embalagem: ParteDoPreco;
+  perdas: ParteDoPreco;
+  imposto: ParteDoPreco;
+  taxaCanal: ParteDoPreco;
+  gastosPercentuais: ParteDoPreco;
+  lucro: ParteDoPreco;
+}
+
+export type PrecoCalculado =
+  | {
+      /** Soma das frações. */
+      percentuais: number;
+      preco: number;
+      motivo: null;
+      composicao: ComposicaoPreco;
+    }
+  | {
+      percentuais: number;
+      preco: null;
+      motivo: MotivoSemPreco;
+      composicao: null;
+    };
+
+/**
+ * **Muda (BE-28):** `preço = custoUnitario ÷ (1 − percentuais)`, com
+ * `percentuais = imposto + taxaCanal + gastosPercentuais + lucro`, todos
+ * frações do preço: o lucro dividido pelo preço é exatamente o lucro
+ * configurado. Com percentuais ≥ 100% não há preço possível. Sem arredondar
+ * (BE-23); o `round6` só decide o "≥ 1" sem o ruído do ponto flutuante.
+ */
+export function calcularPreco(
+  custo: CustoUnitarioDetalhado,
+  p: PercentuaisPreco,
+): PrecoCalculado {
+  const percentuais = p.imposto + p.taxaCanal + p.gastosPercentuais + p.lucro;
+  if (round6(percentuais) >= 1) {
+    return {
+      percentuais,
+      preco: null,
+      motivo: MOTIVO_PERCENTUAIS_ACIMA_DE_100,
+      composicao: null,
+    };
+  }
+  const preco = custo.custoUnitario / (1 - percentuais);
+  const emReais = (valor: number): ParteDoPreco => ({
+    valor,
+    fracao: preco > 0 ? valor / preco : 0,
+  });
+  const doPreco = (fracao: number): ParteDoPreco => ({
+    valor: fracao * preco,
+    fracao,
+  });
+  return {
+    percentuais,
+    preco,
+    motivo: null,
+    composicao: {
+      ingredientes: emReais(custo.ingredientes),
+      gastosMensais: emReais(custo.gastosMensais),
+      gastosPorUnidade: emReais(custo.gastosPorUnidade),
+      embalagem: emReais(custo.embalagem),
+      perdas: emReais(custo.perdas),
+      imposto: doPreco(p.imposto),
+      taxaCanal: doPreco(p.taxaCanal),
+      gastosPercentuais: doPreco(p.gastosPercentuais),
+      lucro: doPreco(p.lucro),
+    },
+  };
+}
+
+/** O que o preço de qualquer canal usa da empresa e da receita. */
+export interface BasePreco {
+  impostoPercentual: number;
+  taxaMaquininha: number;
+  /** `somarGastosPercentuais` dos gastos da empresa. */
+  gastosPercentuais: number;
+  /** O da receita ou o `lucroPadrao` da empresa. */
+  lucro: number;
+}
+
+/** Preço da receita num canal (BE-28): a taxa vem de `taxaDoCanal`. */
+export function calcularPrecoNoCanal(
+  custo: CustoUnitarioDetalhado,
+  canal: CanalParaTaxa,
+  base: BasePreco,
+): PrecoCalculado {
+  return calcularPreco(custo, {
+    imposto: base.impostoPercentual,
+    taxaCanal: taxaDoCanal(canal, base.taxaMaquininha),
+    gastosPercentuais: base.gastosPercentuais,
+    lucro: base.lucro,
+  });
+}
+
 export interface CustoReceitaInput {
   itens: ItemParaCusto[];
   rendimento: number;
   /** Fornadas ou minutos de 1 lote (BE-27); 1 se omitido. */
   usoPorLote?: number;
-  /**
-   * Lucro sobre o preço já resolvido (o da receita ou o `lucroPadrao` da
-   * empresa); `null` não tem preço sugerido.
-   */
-  lucroPercentual: number | null;
+  /** Reais por unidade (BE-27); 0 se omitido. */
+  embalagemPorUnidade?: number;
+  /** Fração das unidades perdidas (BE-27); 0 se omitido. */
+  perdaPercentual?: number;
   /** Todos os gastos indiretos da empresa (lacuna 18). */
   gastos: GastoParaCusto[];
   /** Da configuração de custos da empresa (BE-24): divide os gastos `MENSAL`. */
@@ -175,13 +393,15 @@ export interface CustoReceita {
   lotes: number;
   /** `rendimento × lotes`. */
   totalUnidades: number;
-  /** Soma dos itens (custo dos ingredientes). */
+  /** Soma dos itens (custo dos ingredientes) de `lotes` lotes. */
   custoIngredientes: number;
+  /** Gastos `MENSAL` e `POR_UNIDADE` de `lotes` lotes. */
   custoInvisivel: number;
+  /** `custoUnitario × totalUnidades` (BE-28: com embalagem e perda). */
   custoProducao: number;
   custoUnitario: number;
-  /** `null` sem lucro ou com lucro ≥ 1. */
-  precoSugerido: number | null;
+  /** De onde vem o custo de 1 unidade (BE-28). */
+  detalhe: CustoUnitarioDetalhado;
 }
 
 /**
@@ -222,25 +442,14 @@ export function calcularCustoInvisivel(
 }
 
 /**
- * **Muda (BE-27):** o lucro é fração do **preço**, `custo ÷ (1 − lucro)`, no
- * lugar do markup `custo × (1 + margem)` do `custo.service.ts`. Sem lucro ou
- * com lucro ≥ 1 não há preço (`null`). O preço por canal, com imposto e
- * taxas, é da BE-28.
- */
-export function calcularPrecoSugerido(
-  custoUnitario: number,
-  lucroPercentual: number | null,
-): number | null {
-  if (lucroPercentual == null || lucroPercentual >= 1) return null;
-  return custoUnitario / (1 - lucroPercentual);
-}
-
-/**
  * Custo de `lotes` lotes da receita (1 se omitido). Origem: `calcularReceita`
  * do `custo.service.ts` (recipe-service): a quantidade do item é multiplicada
  * pelos lotes antes do custo do item. Sem arredondamento intermediário
  * (BE-23): quem arredonda são os DTOs de resposta. Desde a BE-27 nada disso
- * é gravado: o custo é calculado na leitura, com os custos atuais.
+ * é gravado. **Muda (BE-28):** o custo unitário é o de
+ * `calcularCustoUnitario` (com embalagem e perda), igual para qualquer número
+ * de lotes, e o custo de produção é `custoUnitario × totalUnidades`. O preço
+ * sai de `calcularPreco`, por canal.
  */
 export function calcularCustoReceita(input: CustoReceitaInput): CustoReceita {
   if (input.rendimento <= 0) {
@@ -250,6 +459,7 @@ export function calcularCustoReceita(input: CustoReceitaInput): CustoReceita {
     );
   }
   const lotes = input.lotes ?? 1;
+  const usoPorLote = input.usoPorLote ?? 1;
   const itens = input.itens.map((item) => {
     const quantidade = item.quantidade * lotes;
     return {
@@ -262,25 +472,38 @@ export function calcularCustoReceita(input: CustoReceitaInput): CustoReceita {
     (total, item) => total + item.custoCalculado,
     0,
   );
+  const detalhe = calcularCustoUnitario({
+    ingredientesLote: input.itens.reduce(
+      (total, item) =>
+        total + calcularCustoItem(item.quantidade, item.custoUnitario),
+      0,
+    ),
+    gastosMensaisLote: somarGastosMensaisLote(
+      input.gastos,
+      usoPorLote,
+      input.capacidadeMensal,
+    ),
+    rendimento: input.rendimento,
+    embalagemPorUnidade: input.embalagemPorUnidade ?? 0,
+    gastosPorUnidade: somarGastosPorUnidade(input.gastos),
+    perdaPercentual: input.perdaPercentual ?? 0,
+  });
   const totalUnidades = input.rendimento * lotes;
-  const custoInvisivel = calcularCustoInvisivel(
-    input.gastos,
-    input.rendimento,
-    input.capacidadeMensal,
-    lotes,
-    input.usoPorLote,
-  );
-  const custoProducao = custoIngredientes + custoInvisivel;
-  const custoUnitario = custoProducao / totalUnidades;
   return {
     itens,
     lotes,
     totalUnidades,
     custoIngredientes,
-    custoInvisivel,
-    custoProducao,
-    custoUnitario,
-    precoSugerido: calcularPrecoSugerido(custoUnitario, input.lucroPercentual),
+    custoInvisivel: calcularCustoInvisivel(
+      input.gastos,
+      input.rendimento,
+      input.capacidadeMensal,
+      lotes,
+      usoPorLote,
+    ),
+    custoProducao: detalhe.custoUnitario * totalUnidades,
+    custoUnitario: detalhe.custoUnitario,
+    detalhe,
   };
 }
 

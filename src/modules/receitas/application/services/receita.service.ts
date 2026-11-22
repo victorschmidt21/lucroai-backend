@@ -1,17 +1,21 @@
 import { Injectable } from '@nestjs/common';
 import { NotFoundError } from '../../../../shared/domain/errors/domain.error.js';
 import type { PrismaTransaction } from '../../../../shared/infra/database/prisma.transaction.js';
+import { CanalVendaService } from '../../../canais/application/services/canal-venda.service.js';
 import { ConfiguracaoCustosService } from '../../../configuracao-custos/application/services/configuracao-custos.service.js';
 import { GastoIndiretoService } from '../../../gastos-indiretos/application/services/gasto-indireto.service.js';
 import { InsumoService } from '../../../insumos/application/services/insumo.service.js';
 import {
+  type BasePreco,
   calcularCustoReceita,
+  calcularPrecoNoCanal,
   calcularPrecoVenda,
   type CustoReceita,
   type FichaTecnica,
   lucroPercentualInformado,
   resolverFichaTecnica,
   simularCenario,
+  somarGastosPercentuais,
   validarFichaTecnica,
 } from '../../domain/receitas.calculos.js';
 import { ReceitaRepository } from '../../infra/repositories/receita.repository.js';
@@ -26,6 +30,7 @@ import {
   toReceitaCustoDto,
 } from '../dto/receita-custo.dto.js';
 import {
+  type PrecoDoCanal,
   type ReceitaComItens,
   type ReceitaDto,
   toReceitaDto,
@@ -53,7 +58,11 @@ interface ContextoCusto {
   configuracao: Awaited<
     ReturnType<ConfiguracaoCustosService['buscarDaEmpresa']>
   >;
+  canais: Awaited<ReturnType<CanalVendaService['listarAtivosDaEmpresa']>>;
 }
+
+/** O Balcão, cuja taxa é a da maquininha: base do `precoSugerido` (BE-28). */
+const BALCAO = { balcao: true, comissaoPercentual: 0 };
 
 interface ItemEntrada {
   insumo_id: number;
@@ -67,6 +76,7 @@ export class ReceitaService {
     private readonly insumoService: InsumoService,
     private readonly gastoIndiretoService: GastoIndiretoService,
     private readonly configuracaoCustosService: ConfiguracaoCustosService,
+    private readonly canalVendaService: CanalVendaService,
   ) {}
 
   /** Da mais nova para a mais antiga (`dataCriacao`), com o custo atual. */
@@ -168,14 +178,12 @@ export class ReceitaService {
     empresaId: number,
   ): Promise<SimulacaoCenarioDto> {
     const receita = await this.getOrFail(id, empresaId);
-    const custo = this.calcular(
-      receita,
-      await this.contextoDe(receita, empresaId),
-    );
+    const contexto = await this.contextoDe(receita, empresaId);
+    const custo = this.calcular(receita, contexto);
     return toSimulacaoCenarioDto(
       simularCenario(dto, {
         custoUnitario: custo.custoUnitario,
-        precoSugerido: custo.precoSugerido,
+        precoSugerido: this.precoSugerido(receita, custo, contexto),
         rendimento: receita.rendimento,
       }),
     );
@@ -231,11 +239,46 @@ export class ReceitaService {
   }
 
   private toDto(row: ReceitaComItens, contexto: ContextoCusto): ReceitaDto {
+    const custo = this.calcular(row, contexto);
+    const base = this.basePreco(row, contexto);
+    const precos: PrecoDoCanal[] = contexto.canais.map((canal) => ({
+      canalId: canal.id,
+      canal: canal.nome,
+      balcao: canal.balcao,
+      ...calcularPrecoNoCanal(custo.detalhe, canal, base),
+    }));
     return toReceitaDto(
       row,
-      this.calcular(row, contexto),
-      this.lucroEfetivo(row, contexto),
+      custo,
+      base.lucro,
+      this.precoSugerido(row, custo, contexto),
+      precos,
     );
+  }
+
+  /**
+   * Preço do Balcão (taxa da maquininha), calculado mesmo com o canal
+   * inativo: é o preço de referência da receita (BE-28).
+   */
+  private precoSugerido(
+    receita: FichaTecnica,
+    custo: CustoReceita,
+    contexto: ContextoCusto,
+  ): number | null {
+    return calcularPrecoNoCanal(
+      custo.detalhe,
+      BALCAO,
+      this.basePreco(receita, contexto),
+    ).preco;
+  }
+
+  private basePreco(ficha: FichaTecnica, contexto: ContextoCusto): BasePreco {
+    return {
+      impostoPercentual: contexto.configuracao.impostoPercentual,
+      taxaMaquininha: contexto.configuracao.taxaMaquininha,
+      gastosPercentuais: somarGastosPercentuais(contexto.gastos),
+      lucro: this.lucroEfetivo(ficha, contexto),
+    };
   }
 
   private lucroEfetivo(ficha: FichaTecnica, contexto: ContextoCusto): number {
@@ -255,7 +298,8 @@ export class ReceitaService {
       })),
       rendimento: receita.rendimento,
       usoPorLote: receita.usoPorLote,
-      lucroPercentual: this.lucroEfetivo(receita, contexto),
+      embalagemPorUnidade: receita.embalagemPorUnidade,
+      perdaPercentual: receita.perdaPercentual,
       gastos: contexto.gastos,
       capacidadeMensal: contexto.configuracao.capacidadeMensal,
       lotes,
@@ -276,7 +320,8 @@ export class ReceitaService {
 
   /**
    * Custos atuais dos insumos (404 se algum não for da empresa), todos os
-   * gastos (lacuna 18) e a configuração de custos. Em sequência, porque
+   * gastos (lacuna 18), a configuração de custos e os canais ativos (BE-28).
+   * Em sequência, porque
    * dentro de uma transação as consultas usam a mesma conexão.
    */
   private async contexto(
@@ -297,10 +342,15 @@ export class ReceitaService {
       empresaId,
       tx,
     );
+    const canais = await this.canalVendaService.listarAtivosDaEmpresa(
+      empresaId,
+      tx,
+    );
     return {
       custoPorInsumo: new Map(insumos.map((i) => [i.id, i.custoUnitario])),
       gastos,
       configuracao,
+      canais,
     };
   }
 
