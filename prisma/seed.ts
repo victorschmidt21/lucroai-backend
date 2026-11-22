@@ -4,6 +4,12 @@
  * (achada pelo CNPJ) numa transação só. Os custos usam as funções de
  * `domain/` dos módulos, para baterem com os da API.
  *
+ * Desde a BE-33, com o cálculo novo do épico E7: configuração de custos
+ * (100 fornadas, lucro de 15%, maquininha de 1,36%), canais (Balcão e iFood
+ * ativos), gastos por tipo, compras de insumo, ficha técnica com uso de
+ * forno, embalagem e perda, e vendas por canal com lucro real. O pão francês
+ * sai a cerca de R$ 0,46 no Balcão.
+ *
  * É a única exceção à regra de "só o repositório acessa o Prisma" e de "um
  * módulo por tabela" (docs/architecture.md).
  *
@@ -15,6 +21,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import * as argon2 from 'argon2';
 import {
   PrismaClient,
+  type GastoIndireto,
   type StatusVenda,
   type TipoGasto,
   type UnidadeMedida,
@@ -27,13 +34,16 @@ import {
 } from '../src/modules/estoque/domain/estoque.calculos.js';
 import { CANAIS_PADRAO } from '../src/modules/canais/domain/canais.calculos.js';
 import { CONFIGURACAO_CUSTOS_PADRAO } from '../src/modules/configuracao-custos/domain/configuracao-custos.calculos.js';
-import { calcularCustoUnitario } from '../src/modules/insumos/domain/insumos.calculos.js';
+import {
+  calcularCustoMedio,
+  calcularCustoReposicao,
+  calcularCustoUnitario,
+} from '../src/modules/insumos/domain/insumos.calculos.js';
 import { calcularProducao } from '../src/modules/producoes/domain/producoes.calculos.js';
 import {
   calcularCustoReceita,
   calcularPercentuaisSemLucro,
   calcularPrecoNoCanal,
-  lucroDaMargem,
   somarGastosPercentuais,
 } from '../src/modules/receitas/domain/receitas.calculos.js';
 import { Venda } from '../src/modules/vendas/domain/venda.entity.js';
@@ -175,8 +185,27 @@ const INSUMOS: {
   },
 ];
 
-// Tipos da BE-26: os gastos do mês são MENSAL; a embalagem genérica é
-// POR_UNIDADE, em reais por unidade (não mais o total do mês).
+// Configuração do seed (BE-33): rateio por fornadas, 100 fornadas por mês,
+// lucro padrão de 15%, sem imposto (o DAS do MEI é gasto mensal) e
+// maquininha de 1,36% no balcão.
+const CONFIGURACAO = {
+  ...CONFIGURACAO_CUSTOS_PADRAO,
+  baseRateio: 'FORNADAS',
+  capacidadeMensal: 100,
+  lucroPadrao: 0.15,
+  impostoPercentual: 0,
+  taxaMaquininha: 0.0136,
+} as const;
+
+// Canais padrão (BE-25), com o iFood ativo: a padaria do seed vende por lá,
+// e a receita mostra o preço nos dois canais ativos.
+const CANAIS = CANAIS_PADRAO.map((canal) =>
+  canal.nome === 'iFood' ? { ...canal, ativo: true } : { ...canal },
+);
+
+// Tipos da BE-26: os gastos do mês são MENSAL (somam R$ 2.515); o saquinho
+// genérico é POR_UNIDADE, em reais por unidade vendida. O DAS é o valor
+// aproximado do MEI de comércio e indústria.
 const GASTOS: {
   descricao: string;
   valor: number;
@@ -185,25 +214,32 @@ const GASTOS: {
   { descricao: 'Energia Elétrica', valor: 450, tipo: 'MENSAL' },
   { descricao: 'Aluguel do Espaço', valor: 1800, tipo: 'MENSAL' },
   { descricao: 'Gás de Cozinha (P45)', valor: 185, tipo: 'MENSAL' },
-  { descricao: 'Saquinho de Papel', valor: 0.1, tipo: 'POR_UNIDADE' },
+  { descricao: 'DAS do MEI', valor: 80, tipo: 'MENSAL' },
+  { descricao: 'Saquinho de Papel', valor: 0.05, tipo: 'POR_UNIDADE' },
 ];
 
-// Mesmos itens do recipe-service (quantidade por lote). A margem (markup) de
-// lá vira lucro sobre o preço (BE-27) com `lucroDaMargem`, que dá o mesmo
-// preço sugerido. Uso de forno, embalagem e perda ficam nos padrões até a
-// BE-33 revisar o seed.
+// Mesmos itens do recipe-service (quantidade por lote), com a ficha técnica
+// da BE-27 (BE-33): uso de forno em fornadas, embalagem própria e perda.
+// `lucroPercentual` null usa o lucro padrão (15%). O pão francês rende 28
+// pães de 50 g por kg de farinha (eram 50) e ocupa 1/5 de uma fornada.
 const RECEITAS: {
   chave: string;
   nome: string;
   rendimento: number;
-  margemLucro: number;
+  usoPorLote: number;
+  embalagemPorUnidade: number;
+  perdaPercentual: number;
+  lucroPercentual: number | null;
   itens: [string, number][];
 }[] = [
   {
     chave: 'PAO',
     nome: 'Pão Francês',
-    rendimento: 50,
-    margemLucro: 0.6,
+    rendimento: 28,
+    usoPorLote: 0.2,
+    embalagemPorUnidade: 0,
+    perdaPercentual: 0.05,
+    lucroPercentual: null,
     itens: [
       ['FARINHA', 1],
       ['SAL', 0.02],
@@ -214,7 +250,10 @@ const RECEITAS: {
     chave: 'BOLO',
     nome: 'Bolo de Chocolate',
     rendimento: 12,
-    margemLucro: 0.5,
+    usoPorLote: 0.5,
+    embalagemPorUnidade: 0.3,
+    perdaPercentual: 0.05,
+    lucroPercentual: 0.2,
     itens: [
       ['FARINHA', 0.25],
       ['ACUCAR', 0.2],
@@ -229,7 +268,10 @@ const RECEITAS: {
     chave: 'BRIGADEIRO',
     nome: 'Brigadeiro Gourmet',
     rendimento: 40,
-    margemLucro: 0.6,
+    usoPorLote: 0.1,
+    embalagemPorUnidade: 0.08,
+    perdaPercentual: 0.02,
+    lucroPercentual: 0.25,
     itens: [
       ['CHOC_GOTAS', 0.3],
       ['CREME_LEITE', 100],
@@ -241,7 +283,10 @@ const RECEITAS: {
     chave: 'QUINDIM',
     nome: 'Quindim',
     rendimento: 12,
-    margemLucro: 0.55,
+    usoPorLote: 0.5,
+    embalagemPorUnidade: 0.15,
+    perdaPercentual: 0.05,
+    lucroPercentual: 0.2,
     itens: [
       ['ACUCAR', 0.3],
       ['OVOS', 6],
@@ -251,23 +296,58 @@ const RECEITAS: {
   },
 ];
 
-// Mesmas 4 produções do operations-service, cerca de 6 meses atrás.
+// As 4 produções do operations-service, cerca de 6 meses atrás, com mais
+// pão (6 lotes = 168 pães) para cobrir as vendas concluídas.
 const PRODUCOES: { receita: string; lotes: number; diasAtras: number }[] = [
-  { receita: 'PAO', lotes: 3, diasAtras: 178 },
+  { receita: 'PAO', lotes: 6, diasAtras: 178 },
   { receita: 'BOLO', lotes: 2, diasAtras: 177 },
   { receita: 'BRIGADEIRO', lotes: 1, diasAtras: 176 },
   { receita: 'QUINDIM', lotes: 1, diasAtras: 175 },
 ];
 
-// As 5 vendas do sales-service mais 3 concluídas, para cada um dos 6 meses do
-// painel ter faturamento (inclusive o mês atual). `mesesAtras` 0 = mês atual
-// (aí `dia` conta dias para trás, ver `dataNoMes`).
-// O preço cobrado é o preço sugerido da receita: com os custos de hoje (lacuna
-// 18), os preços fixos de lá (R$ 0,50 o pão) dariam margens muito negativas.
+// Compras depois das produções (BE-29): a farinha subiu de R$ 3,00 para
+// R$ 3,50 o kg (o médio fica entre os dois) e o açúcar de R$ 4,40 para R$ 4,60.
+const COMPRAS: {
+  insumo: string;
+  quantidade: number;
+  valorTotal: number;
+  diasAtras: number;
+  observacao: string;
+}[] = [
+  {
+    insumo: 'FARINHA',
+    quantidade: 10,
+    valorTotal: 35,
+    diasAtras: 170,
+    observacao: 'Atacadão, nota 1532',
+  },
+  {
+    insumo: 'ACUCAR',
+    quantidade: 5,
+    valorTotal: 23,
+    diasAtras: 170,
+    observacao: 'Atacadão, nota 1532',
+  },
+];
+
+// Preço de mercado informado sem compra (BE-29): a manteiga foi de R$ 12 para
+// R$ 15 os 500 g. A reposição fica 25% acima do médio, e GET /alertas mostra
+// o preço defasado (BE-32).
+const PRECOS_MERCADO: {
+  insumo: string;
+  precoMercado: number;
+  diasAtras: number;
+}[] = [{ insumo: 'MANTEIGA', precoMercado: 0.03, diasAtras: 3 }];
+
+// As 5 vendas do sales-service mais 4, para cada um dos 6 meses do painel ter
+// faturamento (inclusive o mês atual). `mesesAtras` 0 = mês atual (aí `dia`
+// conta dias para trás, ver `dataNoMes`). Sem `canal`, Balcão.
+// O preço cobrado é o preço sugerido da receita no canal, em centavos.
 const VENDAS: {
   status: StatusVenda;
   mesesAtras: number;
   dia: number;
+  canal?: string;
   itens: [string, number][];
 }[] = [
   {
@@ -288,7 +368,13 @@ const VENDAS: {
       ['QUINDIM', 12],
     ],
   },
-  { status: 'CONCLUIDA', mesesAtras: 3, dia: 8, itens: [['BRIGADEIRO', 10]] },
+  {
+    status: 'CONCLUIDA',
+    mesesAtras: 3,
+    dia: 8,
+    canal: 'iFood',
+    itens: [['BRIGADEIRO', 10]],
+  },
   { status: 'CANCELADA', mesesAtras: 2, dia: 15, itens: [['BOLO', 24]] },
   {
     status: 'CONCLUIDA',
@@ -314,8 +400,15 @@ const VENDAS: {
     dia: 1,
     itens: [
       ['PAO', 20],
-      ['BOLO', 4],
+      ['BOLO', 2],
     ],
+  },
+  {
+    status: 'CONCLUIDA',
+    mesesAtras: 0,
+    dia: 2,
+    canal: 'iFood',
+    itens: [['BOLO', 2]],
   },
   {
     status: 'PENDENTE',
@@ -353,12 +446,6 @@ function dataNoMes(mesesAtras: number, dia: number): Date {
   return data < inicioDoMes ? inicioDoMes : data;
 }
 
-function idPor(mapa: Map<string, number>, chave: string): number {
-  const id = mapa.get(chave);
-  if (id === undefined) throw new Error(`Chave desconhecida no seed: ${chave}`);
-  return id;
-}
-
 /** Apaga os dados da empresa, na ordem das FKs; mantém a empresa e os usuários. */
 async function limparEmpresa(tx: Tx, empresaId: number): Promise<void> {
   await tx.venda.deleteMany({ where: { empresaId } }); // itens em CASCADE
@@ -368,9 +455,23 @@ async function limparEmpresa(tx: Tx, empresaId: number): Promise<void> {
   await tx.receita.deleteMany({ where: { empresaId } }); // itens em CASCADE
   await tx.movimentacaoEstoque.deleteMany({ where: { empresaId } });
   await tx.estoque.deleteMany({ where: { empresaId } });
+  await tx.compraInsumo.deleteMany({ where: { empresaId } });
   await tx.insumo.deleteMany({ where: { empresaId } });
   await tx.gastoIndireto.deleteMany({ where: { empresaId } });
   await tx.canalVenda.deleteMany({ where: { empresaId } });
+}
+
+/** Estado de um insumo enquanto o seed avança no tempo. */
+interface InsumoSeed {
+  id: number;
+  estoqueId: number;
+  saldo: number;
+  valorPago: number;
+  quantidadeBaseCusto: number;
+  custoMedio: number;
+  ultimoCusto: number;
+  precoMercado: number | null;
+  precoMercadoData: Date | null;
 }
 
 async function semear(tx: Tx, senhaHash: string): Promise<number> {
@@ -382,22 +483,29 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
   const empresaId = empresa.id;
   await limparEmpresa(tx, empresaId);
 
-  // Configuração de custos com os padrões (BE-24); volta a eles a cada seed.
+  // Configuração de custos do seed (BE-33), regravada a cada seed.
   await tx.configuracaoCustos.upsert({
     where: { empresaId },
-    create: { ...CONFIGURACAO_CUSTOS_PADRAO, empresaId },
-    update: { ...CONFIGURACAO_CUSTOS_PADRAO },
+    create: { ...CONFIGURACAO, empresaId },
+    update: { ...CONFIGURACAO },
   });
 
-  // Canais de venda padrão (BE-25), recriados a cada seed. As vendas do seed
-  // são no Balcão (BE-30).
-  let balcaoId: number | null = null;
-  for (const canal of CANAIS_PADRAO) {
-    const criado = await tx.canalVenda.create({
-      data: { ...canal, empresaId },
-    });
-    if (criado.balcao) balcaoId = criado.id;
+  // Canais de venda (BE-25), recriados a cada seed.
+  const canais = new Map<
+    string,
+    { id: number; balcao: boolean; comissaoPercentual: number }
+  >();
+  for (const def of CANAIS) {
+    canais.set(
+      def.nome,
+      await tx.canalVenda.create({ data: { ...def, empresaId } }),
+    );
   }
+  const canal = (nome: string) => {
+    const c = canais.get(nome);
+    if (!c) throw new Error(`Canal desconhecido no seed: ${nome}`);
+    return c;
+  };
 
   for (const usuario of USUARIOS) {
     const dados = { ...usuario, empresaId, senha: senhaHash };
@@ -408,31 +516,39 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
     });
   }
 
-  // Insumos, saldo e a entrada inicial (ENTRADA/COMPRA).
-  const insumoIds = new Map<string, number>();
-  const custoInsumo = new Map<number, number>();
-  const saldoInsumo = new Map<number, { estoqueId: number; saldo: number }>();
+  // Insumos com a compra inicial, como POST /insumos com saldo inicial
+  // (BE-29): estoque e entrada ENTRADA/COMPRA ligada à compra.
+  const insumos = new Map<string, InsumoSeed>();
   for (const def of INSUMOS) {
-    const custoUnitario = calcularCustoUnitario(
-      def.valorPago,
-      def.quantidadeBaseCusto,
-    );
-    const insumo = await tx.insumo.create({
+    const custo = calcularCustoUnitario(def.valorPago, def.quantidadeBaseCusto);
+    const data = diasAtras(180);
+    const criado = await tx.insumo.create({
       data: {
         empresaId,
         nome: def.nome,
         quantidadeBaseCusto: def.quantidadeBaseCusto,
         unidade: def.unidade,
         valorPago: def.valorPago,
-        custoMedio: custoUnitario,
-        ultimoCusto: custoUnitario,
-        dataCriacao: diasAtras(180),
+        custoMedio: custo,
+        ultimoCusto: custo,
+        dataCriacao: data,
+      },
+    });
+    const compra = await tx.compraInsumo.create({
+      data: {
+        empresaId,
+        insumoId: criado.id,
+        quantidade: def.estoqueInicial,
+        valorTotal: def.estoqueInicial * custo,
+        custoUnitario: custo,
+        observacao: 'Cadastro do insumo',
+        dataCompra: data,
       },
     });
     const estoque = await tx.estoque.create({
       data: {
         empresaId,
-        insumoId: insumo.id,
+        insumoId: criado.id,
         quantidadeDisponivel: def.estoqueInicial,
         quantidadeMinima: def.estoqueMinimo,
       },
@@ -440,111 +556,112 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
     await tx.movimentacaoEstoque.create({
       data: {
         empresaId,
-        insumoId: insumo.id,
+        insumoId: criado.id,
         tipo: 'ENTRADA',
         origem: 'COMPRA',
         quantidade: def.estoqueInicial,
-        observacao: 'Estoque inicial',
-        dataMovimentacao: diasAtras(180),
+        referenciaId: compra.id,
+        observacao: 'Cadastro do insumo',
+        dataMovimentacao: data,
       },
     });
-    insumoIds.set(def.chave, insumo.id);
-    custoInsumo.set(insumo.id, custoUnitario);
-    saldoInsumo.set(insumo.id, {
+    insumos.set(def.chave, {
+      id: criado.id,
       estoqueId: estoque.id,
       saldo: def.estoqueInicial,
+      valorPago: def.valorPago,
+      quantidadeBaseCusto: def.quantidadeBaseCusto,
+      custoMedio: custo,
+      ultimoCusto: custo,
+      precoMercado: null,
+      precoMercadoData: null,
     });
   }
+  const insumo = (chave: string) => {
+    const i = insumos.get(chave);
+    if (!i) throw new Error(`Insumo desconhecido no seed: ${chave}`);
+    return i;
+  };
 
-  const gastos = [];
+  const gastos: GastoIndireto[] = [];
   for (const def of GASTOS) {
     gastos.push(await tx.gastoIndireto.create({ data: { empresaId, ...def } }));
   }
+  const gastosPercentuais = somarGastosPercentuais(gastos);
 
-  // Receitas e o custo de 1 lote com todos os gastos, que não é gravado:
-  // a API o calcula na leitura (BE-27).
+  // Receitas: só a ficha técnica é gravada (BE-27); a API calcula o custo na
+  // leitura. `custoDe` repete a conta com os custos do momento: a reposição
+  // forma o preço, e o custo médio é o da produção e da venda (BE-30).
   const receitas = new Map<
     string,
-    {
-      id: number;
-      rendimento: number;
-      custoProducao: number;
-      custoUnitario: number;
-      ingredientesLote: number;
-      precoSugerido: number;
-      itens: { insumoId: number; quantidade: number }[];
-    }
+    { id: number; def: (typeof RECEITAS)[number] }
   >();
   for (const def of RECEITAS) {
-    const itens = def.itens.map(([chave, quantidade]) => {
-      const insumoId = idPor(insumoIds, chave);
-      return {
-        insumoId,
-        quantidade,
-        custoUnitario: custoInsumo.get(insumoId) ?? 0,
-      };
-    });
-    const lucroPercentual = lucroDaMargem(def.margemLucro);
-    const custo = calcularCustoReceita({
-      itens,
-      rendimento: def.rendimento,
-      gastos,
-      capacidadeMensal: CONFIGURACAO_CUSTOS_PADRAO.capacidadeMensal,
-    });
-    // Preço sugerido do Balcão (BE-28), o que a API mostra em `precoSugerido`.
-    const precoBalcao = calcularPrecoNoCanal(
-      custo.detalhe,
-      { balcao: true, comissaoPercentual: 0 },
-      {
-        impostoPercentual: CONFIGURACAO_CUSTOS_PADRAO.impostoPercentual,
-        taxaMaquininha: CONFIGURACAO_CUSTOS_PADRAO.taxaMaquininha,
-        gastosPercentuais: somarGastosPercentuais(gastos),
-        lucro: lucroPercentual,
-      },
-    );
-    const receita = await tx.receita.create({
+    const criada = await tx.receita.create({
       data: {
         empresaId,
         nome: def.nome,
         rendimento: def.rendimento,
         unidadeRendimento: 'UN',
-        lucroPercentual,
+        usoPorLote: def.usoPorLote,
+        embalagemPorUnidade: def.embalagemPorUnidade,
+        perdaPercentual: def.perdaPercentual,
+        lucroPercentual: def.lucroPercentual,
         dataCriacao: diasAtras(179),
         itens: {
-          create: custo.itens.map(({ insumoId, quantidade }) => ({
-            insumoId,
+          create: def.itens.map(([chave, quantidade]) => ({
+            insumoId: insumo(chave).id,
             quantidade,
           })),
         },
       },
     });
-    receitas.set(def.chave, {
-      id: receita.id,
-      rendimento: def.rendimento,
-      custoProducao: custo.custoProducao,
-      custoUnitario: custo.custoUnitario,
-      ingredientesLote: custo.detalhe.ingredientesLote,
-      precoSugerido: precoBalcao.preco ?? 0,
-      itens: custo.itens,
-    });
+    receitas.set(def.chave, { id: criada.id, def });
   }
   const receita = (chave: string) => {
     const r = receitas.get(chave);
     if (!r) throw new Error(`Receita desconhecida no seed: ${chave}`);
     return r;
   };
+  const custoDe = (chave: string, base: 'medio' | 'reposicao') => {
+    const { def } = receita(chave);
+    return calcularCustoReceita({
+      itens: def.itens.map(([c, quantidade]) => {
+        const i = insumo(c);
+        return {
+          insumoId: i.id,
+          quantidade,
+          custoUnitario:
+            base === 'medio' ? i.custoMedio : calcularCustoReposicao(i),
+        };
+      }),
+      rendimento: def.rendimento,
+      usoPorLote: def.usoPorLote,
+      embalagemPorUnidade: def.embalagemPorUnidade,
+      perdaPercentual: def.perdaPercentual,
+      gastos,
+      capacidadeMensal: CONFIGURACAO.capacidadeMensal,
+    });
+  };
 
-  // Produções com todos os gastos (como POST /producoes sem gasto_indireto_ids):
-  // baixa dos insumos (SAIDA/PRODUCAO) e entrada no produto acabado.
+  // Produções com todos os gastos, como POST /producoes sem
+  // gasto_indireto_ids (BE-30): ingredientes ao custo médio e os gastos
+  // mensais do forno; baixa dos insumos (SAIDA/PRODUCAO) e entrada no
+  // produto acabado.
   const saldoProduto = new Map<number, number>();
   for (const def of PRODUCOES) {
     const r = receita(def.receita);
     const data = diasAtras(def.diasAtras);
     const calculo = calcularProducao(
-      r,
+      {
+        rendimento: r.def.rendimento,
+        ingredientesLote: custoDe(def.receita, 'medio').detalhe
+          .ingredientesLote,
+        usoPorLote: r.def.usoPorLote,
+      },
       def.lotes,
       gastos,
-      CONFIGURACAO_CUSTOS_PADRAO.capacidadeMensal,
+      CONFIGURACAO.capacidadeMensal,
     );
     const producao = await tx.producao.create({
       data: {
@@ -558,19 +675,14 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
         rateios: { create: calculo.rateios },
       },
     });
-    for (const item of r.itens) {
-      const quantidade = calcularQuantidadeBaixa(item.quantidade, def.lotes);
-      const estoque = saldoInsumo.get(item.insumoId);
-      if (!estoque) throw new Error('Insumo sem estoque no seed');
-      estoque.saldo = calcularSaldoAposMovimentacao(
-        estoque.saldo,
-        'SAIDA',
-        quantidade,
-      );
+    for (const [chave, porLote] of r.def.itens) {
+      const i = insumo(chave);
+      const quantidade = calcularQuantidadeBaixa(porLote, def.lotes);
+      i.saldo = calcularSaldoAposMovimentacao(i.saldo, 'SAIDA', quantidade);
       await tx.movimentacaoEstoque.create({
         data: {
           empresaId,
-          insumoId: item.insumoId,
+          insumoId: i.id,
           tipo: 'SAIDA',
           origem: 'PRODUCAO',
           quantidade,
@@ -600,33 +712,93 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
     });
   }
 
-  // Vendas: total e margem pela entidade Venda; a concluída dá baixa no
-  // produto acabado (SAIDA/VENDA), como PATCH /vendas/:id/status.
+  // Compras, como POST /insumos/:id/compras (BE-29): entrada no estoque,
+  // custo médio ponderado pelo saldo de antes, e a compra vira o último custo
+  // e o preço de referência, sem preço de mercado.
+  for (const def of COMPRAS) {
+    const i = insumo(def.insumo);
+    const data = diasAtras(def.diasAtras);
+    const custoCompra = calcularCustoUnitario(def.valorTotal, def.quantidade);
+    const compra = await tx.compraInsumo.create({
+      data: {
+        empresaId,
+        insumoId: i.id,
+        quantidade: def.quantidade,
+        valorTotal: def.valorTotal,
+        custoUnitario: custoCompra,
+        observacao: def.observacao,
+        dataCompra: data,
+      },
+    });
+    await tx.movimentacaoEstoque.create({
+      data: {
+        empresaId,
+        insumoId: i.id,
+        tipo: 'ENTRADA',
+        origem: 'COMPRA',
+        quantidade: def.quantidade,
+        referenciaId: compra.id,
+        observacao: def.observacao,
+        dataMovimentacao: data,
+      },
+    });
+    i.custoMedio = calcularCustoMedio(
+      i.saldo,
+      i.custoMedio,
+      def.quantidade,
+      custoCompra,
+    );
+    i.saldo = calcularSaldoAposMovimentacao(i.saldo, 'ENTRADA', def.quantidade);
+    i.ultimoCusto = custoCompra;
+    i.valorPago = def.valorTotal;
+    i.quantidadeBaseCusto = def.quantidade;
+    i.precoMercado = null;
+    i.precoMercadoData = null;
+  }
+  for (const def of PRECOS_MERCADO) {
+    const i = insumo(def.insumo);
+    i.precoMercado = def.precoMercado;
+    i.precoMercadoData = diasAtras(def.diasAtras);
+  }
+
+  // Vendas, como POST /vendas (BE-30): o preço sugerido no canal (com a
+  // reposição) em centavos, o custo com o custo médio e o lucro real pelos
+  // percentuais do canal. A concluída dá baixa no produto acabado
+  // (SAIDA/VENDA), como PATCH /vendas/:id/status.
   for (const def of VENDAS) {
     const data = dataNoMes(def.mesesAtras, def.dia);
+    const c = canal(def.canal ?? 'Balcão');
     const nova = Venda.nova(
       empresaId,
       def.itens.map(([chave, quantidade]) => {
         const r = receita(chave);
+        const { preco } = calcularPrecoNoCanal(
+          custoDe(chave, 'reposicao').detalhe,
+          c,
+          {
+            impostoPercentual: CONFIGURACAO.impostoPercentual,
+            taxaMaquininha: CONFIGURACAO.taxaMaquininha,
+            gastosPercentuais,
+            lucro: r.def.lucroPercentual ?? CONFIGURACAO.lucroPadrao,
+          },
+        );
+        if (preco === null) {
+          throw new Error(`Receita sem preço no seed: ${chave}`);
+        }
         return {
           receitaId: r.id,
           quantidade,
-          // O preço cobrado tem centavos, como o digitado na tela; o preço
-          // sugerido é guardado sem arredondar (BE-23).
-          precoUnitarioReal: round2(r.precoSugerido),
-          custoUnitario: r.custoUnitario,
+          precoUnitarioReal: round2(preco),
+          custoUnitario: custoDe(chave, 'medio').custoUnitario,
         };
       }),
       {
-        canalId: balcaoId,
-        percentuaisSemLucro: calcularPercentuaisSemLucro(
-          { balcao: true, comissaoPercentual: 0 },
-          {
-            impostoPercentual: CONFIGURACAO_CUSTOS_PADRAO.impostoPercentual,
-            taxaMaquininha: CONFIGURACAO_CUSTOS_PADRAO.taxaMaquininha,
-            gastosPercentuais: somarGastosPercentuais(gastos),
-          },
-        ),
+        canalId: c.id,
+        percentuaisSemLucro: calcularPercentuaisSemLucro(c, {
+          impostoPercentual: CONFIGURACAO.impostoPercentual,
+          taxaMaquininha: CONFIGURACAO.taxaMaquininha,
+          gastosPercentuais,
+        }),
       },
     );
     const venda = await tx.venda.create({
@@ -663,11 +835,22 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
     }
   }
 
-  // Saldos finais.
-  for (const { estoqueId, saldo } of saldoInsumo.values()) {
+  // Custos e saldos finais.
+  for (const i of insumos.values()) {
+    await tx.insumo.update({
+      where: { id: i.id },
+      data: {
+        valorPago: i.valorPago,
+        quantidadeBaseCusto: i.quantidadeBaseCusto,
+        custoMedio: i.custoMedio,
+        ultimoCusto: i.ultimoCusto,
+        precoMercado: i.precoMercado,
+        precoMercadoData: i.precoMercadoData,
+      },
+    });
     await tx.estoque.update({
-      where: { id: estoqueId },
-      data: { quantidadeDisponivel: saldo },
+      where: { id: i.estoqueId },
+      data: { quantidadeDisponivel: i.saldo },
     });
   }
   await tx.estoqueProdutoAcabado.createMany({
