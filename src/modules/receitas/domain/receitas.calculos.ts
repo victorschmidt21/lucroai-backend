@@ -623,8 +623,8 @@ export interface SimulacaoCenario {
   pontoEquilibrio: PontoEquilibrioProduto;
   /**
    * Legado: `ceil(custo × volume ÷ preço)`, que não diz quanto vender para
-   * pagar o mês. Fica só porque o schema atual do frontend o exige; sai com
-   * a BE-33.
+   * pagar o mês. Fica só porque o schema atual do frontend o exige; sai
+   * quando o frontend usar o `pontoEquilibrio` (docs/api.md).
    */
   breakEven: number;
 }

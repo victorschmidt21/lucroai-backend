@@ -54,7 +54,7 @@ export class SimulacaoCenarioDto {
   margemProjetada: number;
   /**
    * `ceil(custo × volume / preço)`, em unidades.
-   * @deprecated Use `pontoEquilibrio` (BE-31); sai com a BE-33.
+   * @deprecated Use `pontoEquilibrio` (BE-31); sai quando o frontend usá-lo.
    * @example 84
    */
   breakEven: number;
