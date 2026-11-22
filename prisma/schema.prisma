@@ -76,6 +76,7 @@ model Empresa {
   producoes                   Producao[]
   vendas                      Venda[]
   configuracaoCustos          ConfiguracaoCustos?
+  canaisVenda                 CanalVenda[]
 
   @@map("empresa")
 }
@@ -147,6 +148,24 @@ model ConfiguracaoCustos {
   empresa Empresa @relation(fields: [empresaId], references: [id])
 
   @@map("configuracao_custos")
+}
+
+// ---------- canais ----------
+
+/// Canal de venda (BE-25): balcão, iFood etc. A comissão é fração do preço
+/// (0 a 1). `balcao` marca o canal padrão, que não pode ser excluído.
+model CanalVenda {
+  id                 Int     @id @default(autoincrement())
+  empresaId          Int     @map("empresa_id")
+  nome               String
+  comissaoPercentual Float   @map("comissao_percentual")
+  ativo              Boolean @default(true)
+  balcao             Boolean @default(false)
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+
+  @@index([empresaId])
+  @@map("canal_venda")
 }
 
 // ---------- receitas ----------
