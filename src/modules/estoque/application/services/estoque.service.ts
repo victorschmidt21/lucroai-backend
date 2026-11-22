@@ -43,7 +43,11 @@ export class EstoqueService {
     return toEstoqueDto(await this.getOrFail(insumoId, empresaId));
   }
 
-  /** Entrada manual (`ENTRADA/COMPRA`): saldo e movimentação na mesma transação. */
+  /**
+   * Entrada manual (`ENTRADA/COMPRA`): saldo e movimentação na mesma transação.
+   * Sem valor, não mexe no custo médio do insumo (é como entrar ao médio); a
+   * compra com valor é `POST /insumos/:id/compras` (BE-29).
+   */
   registrarEntrada(
     insumoId: number,
     dto: RegistrarEntradaEstoqueDto,
@@ -105,14 +109,16 @@ export class EstoqueService {
 
   /**
    * Para o módulo insumos, na transação que cria o insumo: cria o saldo e,
-   * com quantidade maior que 0, uma movimentação ENTRADA/COMPRA. Substitui o
-   * evento `insumo-criado` dos microsserviços.
+   * com quantidade maior que 0, uma movimentação ENTRADA/COMPRA, com o id da
+   * compra inicial em `referenciaId` (BE-29). Substitui o evento
+   * `insumo-criado` dos microsserviços.
    */
   async criarRegistroInicial(
     insumoId: number,
     empresaId: number,
     quantidade: number,
     tx: PrismaTransaction,
+    compraId: number | null = null,
   ): Promise<SaldoInsumo> {
     const estoque = await this.repository.create(
       { empresaId, insumoId, quantidadeDisponivel: quantidade },
@@ -126,6 +132,7 @@ export class EstoqueService {
           tipo: 'ENTRADA',
           origem: 'COMPRA',
           quantidade,
+          referenciaId: compraId,
         },
         tx,
       );
@@ -134,6 +141,46 @@ export class EstoqueService {
       quantidadeDisponivel: estoque.quantidadeDisponivel,
       quantidadeMinima: estoque.quantidadeMinima,
     };
+  }
+
+  /**
+   * Para o módulo insumos (BE-29), na transação da compra: trava o saldo, dá
+   * entrada da quantidade (`ENTRADA/COMPRA`, `referenciaId` = id da compra) e
+   * devolve o saldo **antes** da entrada, que pondera o custo médio. A trava
+   * vale até o fim da transação, então duas compras do mesmo insumo não leem
+   * o mesmo saldo nem o mesmo médio.
+   */
+  async registrarEntradaPorCompra(
+    insumoId: number,
+    quantidade: number,
+    compraId: number,
+    observacao: string | null,
+    empresaId: number,
+    tx: PrismaTransaction,
+  ): Promise<{ saldoAnterior: number }> {
+    const estoque = await this.getForUpdateOrFail(insumoId, empresaId, tx);
+    await this.repository.updateQuantidadeDisponivel(
+      estoque.id,
+      calcularSaldoAposMovimentacao(
+        estoque.quantidadeDisponivel,
+        'ENTRADA',
+        quantidade,
+      ),
+      tx,
+    );
+    await this.repository.createMovimentacao(
+      {
+        empresaId,
+        insumoId,
+        tipo: 'ENTRADA',
+        origem: 'COMPRA',
+        quantidade,
+        referenciaId: compraId,
+        observacao,
+      },
+      tx,
+    );
+    return { saldoAnterior: estoque.quantidadeDisponivel };
   }
 
   /**
