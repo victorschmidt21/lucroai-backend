@@ -361,7 +361,7 @@ saída:   saldo = round6(saldo − quantidade)          // pode ficar negativo
 - Entrada manual: `quantidade ≥ 0.000001`, origem `COMPRA`, `referenciaId` `null`; a movimentação grava a quantidade como veio (só o saldo leva `round6`). Responde 201. **Muda (BE-11, lacuna 22):** aceita `observacao` (opcional, até 200, aparada; vazia vira `null`). Não mexe no custo do insumo (BE-29).
 - Entrada por compra (**novo**, BE-29, `EstoqueService.registrarEntradaPorCompra`, dentro da `tx` da compra): como a manual, com `referenciaId` = id da compra; devolve o saldo anterior, que pondera o custo médio ([Compras de insumo](#compras-de-insumo)). A compra inicial do cadastro também liga a movimentação dela pelo `referenciaId`.
 - Baixa por produção (`EstoqueService.baixarPorProducao`, dentro da `tx` da produção): para cada item da receita, `quantidade = round6(item.quantidade × lotes)`, origem `PRODUCAO`, `referenciaId` = id da produção.
-- **Saldo negativo é aceito** (lacuna 10, mantida na BE-11). Bloquear a produção sem saldo é decisão de produto e pede uma issue própria.
+- **Saldo negativo é aceito** (lacuna 10, mantida na BE-11 e confirmada como decisão de produto na BE-32): a produção não confere o saldo. **Novo (BE-32):** `Insumo` e `Estoque` trazem `estoqueNegativo` (`estoqueNegativo(saldo)`: `saldo < 0`; 0 não é negativo), para a indicação visual, e o insumo aparece em [`GET /alertas`](#alertas).
 - Estoque mínimo começa em 0. **Muda (BE-11, lacuna 14):** `PATCH /estoque/insumos/:id/minimo` define o mínimo (≥ 0), sem movimentação; responde 200.
 - Movimentações listadas da mais recente para a mais antiga (o `id` desempata).
 
@@ -438,6 +438,21 @@ status inicial      = PENDENTE
 - Listagem: filtros `status`, `dataInicio` (`dataVenda ≥`) e `dataFim` (`dataVenda ≤`), da mais recente para a mais antiga (`prisma-venda.repository.ts`, `findAll`); o `id` desempata. **Muda (BE-13, lacuna 7):** as datas precisam ter data, hora e fuso (`Z` ou `±hh:mm`), como a web envia (`toISOString()`); só a data → 400.
 - `Venda` é a única entidade de classe do projeto (BE-13, `vendas/domain/venda.entity.ts`): `Venda.nova(empresaId, itens, { canalId, percentuaisSemLucro })` (margem, lucro real, total e status inicial), `calcularMargemRealizada`, `calcularLucroReal` (BE-30), `calcularTotal` e `alterarStatus` (transições) ficam nela.
 
+## Alertas
+
+**Novo (BE-32).** `GET /alertas` junta o que o frontend avisa ao entrar. Só lê; o módulo `alertas` não tem tabela. Funções puras em `alertas/domain/alertas.calculos.ts` (`alertasDeEstoqueNegativo` e `alertasDePrecoDefasado`), com as regras de `estoque` (`estoqueNegativo`) e de `insumos` (`calcularAumentoReposicao` e `precoDefasado`).
+
+```
+estoqueNegativo:  saldo < 0
+aumento:          custoReposicao ÷ custoMedio − 1               // null com custoMedio ≤ 0
+precoDefasado:    round6(aumento) > 0,10                        // mais de 10%
+```
+
+- **Estoque negativo**: insumos da empresa com saldo < 0, por nome, com `id`, `nome`, `saldo` e `unidade`. O estoque negativo continua permitido; o alerta só avisa.
+- **Preço defasado**: insumos cuja reposição (`precoMercado ?? ultimoCusto`, [Compras de insumo](#compras-de-insumo)) subiu **mais** de 10% sobre o custo médio, por nome. O estoque foi comprado mais barato do que custa repor: o preço sugerido, que já usa a reposição, subiu, e quem vende pelo preço antigo perde margem. 10% exatos não contam; o aumento é comparado com 6 casas para o erro de ponto flutuante não fazer 10% virar "mais de 10%". Custo médio ≤ 0 não tem base e nunca está defasado. Uma reposição abaixo do médio também não é alerta.
+- Cada insumo defasado traz as receitas que o usam (vazia se nenhuma), com o preço no **Balcão** (`ReceitaService.listarPrecosSugeridos`): `precoSugerido`, o novo, com o custo de reposição (o mesmo de `GET /receitas/:id`), e `precoComCustoMedio`, o mesmo preço com o custo médio dos insumos, para a pessoa ver quanto o preço subiu. Os preços só são calculados quando há insumo defasado.
+- Arredondamento só na resposta: custos com 6 casas, `aumentoPercentual` (fração) e preços com 4.
+
 ## Lacunas do backend atual
 
 A lista numerada está em [`lucroai-frontend/docs/api-integration.md#lacunas-do-backend`](https://github.com/victorschmidt21/lucroai-frontend/blob/main/docs/api-integration.md#lacunas-do-backend). Destino de cada uma no monolito:
@@ -453,7 +468,7 @@ A lista numerada está em [`lucroai-frontend/docs/api-integration.md#lacunas-do-
 | 7 | filtro de data das vendas com `YYYY-MM-DD` | corrigida | BE-13 | só aceita data e hora ISO 8601 completas, comparadas como instantes (o formato que a web já envia) |
 | 8 | filtros inválidos derrubam o serviço (500) | corrigida | BE-12, BE-13 | query validada por DTO → 400 |
 | 9 | venda concluída sem estoque fica `CONCLUIDA` | corrigida | BE-13 | baixa e status na mesma transação |
-| 10 | produção aceita saldo negativo de insumo | mantida | BE-11 | decisão de produto; pede uma issue própria |
+| 10 | produção aceita saldo negativo de insumo | mantida | BE-11, BE-32 | decisão de produto (2026-11-21): continua permitido, com `estoqueNegativo` nas listas e o aviso em `GET /alertas` |
 | 11 | produção não confere a empresa da receita e dos gastos | corrigida | BE-08, BE-12 | `buscarVariosDaEmpresa` e receita da empresa → 404 |
 | 12 | nome do insumo sem limite no DTO | corrigida | BE-07 | `@MaxLength(80)` e trim |
 | 13 | exclusão de insumo usado em receita | corrigida | BE-05, BE-07 | FK `RESTRICT` → 409 `INSUMO_EM_USO` |
