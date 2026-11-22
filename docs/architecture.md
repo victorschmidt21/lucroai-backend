@@ -44,9 +44,9 @@ Cada tabela pertence a **um** módulo, e só ele lê e escreve nela pelo Prisma.
 | `configuracao-custos` | `ConfiguracaoCustos` | configuração de custos da empresa (base de rateio, capacidade mensal, lucro, imposto e maquininha), com os padrões e a validação (`validarConfiguracaoCustos`); exporta `ConfiguracaoCustosService` (`criarPadrao(empresaId, tx)` e `buscarDaEmpresa(empresaId, tx?)`) | — | BE-24, BE-26 |
 | `canais` | `CanalVenda` | canais de venda com comissão (Balcão, iFood…), CRUD em `/canais`, com os padrões (`CANAIS_PADRAO`), a regra do Balcão (`garantirCanalExcluivel`) e a taxa no preço (`taxaDoCanal`); exporta `CanalVendaService` (`criarPadrao(empresaId, tx)`, `listarAtivosDaEmpresa(empresaId, tx?)` e, desde a BE-30, `buscarParaVenda(canalId?, empresaId)`, com o Balcão como padrão) | — | BE-25, BE-28, BE-30 |
 | `gastos-indiretos` | `GastoIndireto` | cadastro de gastos por tipo (`MENSAL`, `POR_UNIDADE`, `PERCENTUAL_VENDA`), validação por tipo (`validarGasto`) e a parte de cada gasto no custo (`calcularGastoNoCusto`); exporta `GastoIndiretoService` (`listarPorEmpresa` e `buscarVariosDaEmpresa`) | — | BE-08, BE-26 |
-| `receitas` | `Receita`, `ItemReceita` | receitas com a ficha técnica (`validarFichaTecnica`); custo para 1 ou N lotes, com o custo de reposição dos insumos (BE-29) (`calcularCustoReceita`, com embalagem e perda) e preço por canal ativo (`calcularPrecoNoCanal`) e percentuais sem o lucro (`calcularPercentuaisSemLucro`, BE-30), calculados na leitura e nunca gravados; simulação (`simularCenario`) e preço de venda (`calcularPrecoVenda`), sem gravar; exporta `ReceitaService` (`buscarDaEmpresa`, com o custo de 1 lote ao custo médio dos insumos e a base do preço, BE-30) | `insumos`, `gastos-indiretos`, `configuracao-custos`, `canais` | BE-09, BE-10, BE-26, BE-27, BE-28, BE-30 |
+| `receitas` | `Receita`, `ItemReceita` | receitas com a ficha técnica (`validarFichaTecnica`); custo para 1 ou N lotes, com o custo de reposição dos insumos (BE-29) (`calcularCustoReceita`, com embalagem e perda) e preço por canal ativo (`calcularPrecoNoCanal`) e percentuais sem o lucro (`calcularPercentuaisSemLucro`, BE-30), calculados na leitura e nunca gravados; simulação por canal com lucro real e ponto de equilíbrio do produto (`simularCenario`, `calcularMargemContribuicao`, `calcularPontoEquilibrioProduto`, BE-31) e preço de venda (`calcularPrecoVenda`), sem gravar; exporta `ReceitaService` (`buscarDaEmpresa`, com o custo de 1 lote ao custo médio dos insumos e a base do preço, BE-30) | `insumos`, `gastos-indiretos`, `configuracao-custos`, `canais` | BE-09, BE-10, BE-26, BE-27, BE-28, BE-30, BE-31 |
 | `producoes` | `Producao`, `RateioProducao` | produção com o custo dos ingredientes ao custo médio e o rateio dos gastos mensais, uma vez só (`calcularProducao`), baixa de insumos e entrada de produto acabado, numa transação só; não exporta service | `receitas`, `gastos-indiretos`, `estoque`, `configuracao-custos` | BE-12, BE-26, BE-30 |
-| `vendas` | `Venda`, `ItemVenda` | vendas por canal com a entidade `Venda` (total, margem, lucro real e transições de status) e conclusão com baixa de produto acabado (`saidaPorVenda`) na mesma transação; não exporta service | `receitas`, `estoque`, `canais` | BE-13, BE-30 |
+| `vendas` | `Venda`, `ItemVenda` | vendas por canal com a entidade `Venda` (total, margem, lucro real e transições de status) e conclusão com baixa de produto acabado (`saidaPorVenda`) na mesma transação; resumo do painel com o ponto de equilíbrio da empresa (`GET /vendas/resumo`, `calcularPontoEquilibrioEmpresa` em `vendas.calculos.ts`, BE-31); não exporta service | `receitas`, `estoque`, `canais`, `gastos-indiretos` | BE-13, BE-30, BE-31 |
 
 ### Tabelas e donos
 
@@ -95,7 +95,7 @@ src/modules/<modulo>/
     └── guards/<nome>.guard.ts       # só quando o módulo precisa de guard próprio (ex.: auth/AuthThrottlerGuard)
 ```
 
-Só o módulo `vendas` tem também `domain/venda.entity.ts` (e o `venda.entity.spec.ts`). Módulo com várias tabelas (ex.: `estoque`) tem um repositório e, se fizer sentido, um service por tabela principal, nas mesmas pastas. Não crie submódulos, interfaces de repositório, tokens `Symbol` nem `OVERVIEW.md`.
+Só o módulo `vendas` tem também `domain/venda.entity.ts` (e o `venda.entity.spec.ts`), ao lado do `vendas.calculos.ts` (BE-31). Módulo com várias tabelas (ex.: `estoque`) tem um repositório e, se fizer sentido, um service por tabela principal, nas mesmas pastas. Não crie submódulos, interfaces de repositório, tokens `Symbol` nem `OVERVIEW.md`.
 
 ### Camadas
 
@@ -134,7 +134,7 @@ Só o módulo `vendas` tem também `domain/venda.entity.ts` (e o `venda.entity.s
 ## Comunicação entre módulos
 
 1. **Service exportado.** O módulo A coloca `BModule` em `imports` e injeta um service listado em `exports` do `BModule`. Esses métodos devolvem DTOs.
-2. **Funções puras.** A pode importar `src/modules/<b>/domain/<b>.calculos.ts` de um módulo do qual depende (ex.: `receitas` e `producoes` usam `calcularGastoNoCusto` de `gastos-indiretos`, e `receitas` usa `taxaDoCanal` de `canais`, e `vendas` usa `calcularPercentuaisSemLucro` de `receitas`). É o único arquivo interno de outro módulo que se pode importar.
+2. **Funções puras.** A pode importar `src/modules/<b>/domain/<b>.calculos.ts` de um módulo do qual depende (ex.: `receitas` e `producoes` usam `calcularGastoNoCusto` de `gastos-indiretos`, e `receitas` usa `taxaDoCanal` de `canais`, e `vendas` usa `calcularPercentuaisSemLucro`, `calcularMargemContribuicao` e `somarGastosMensais` de `receitas`). É o único arquivo interno de outro módulo que se pode importar.
 3. **Transação.** Quem orquestra abre a transação e passa o `tx` aos services dos outros módulos, que o repassam aos repositórios. Tudo ou nada:
 
    ```ts

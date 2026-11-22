@@ -15,13 +15,13 @@ Cada fórmula vira uma função pura em `src/modules/<modulo>/domain/<modulo>.ca
 | Custo por unidade-base do insumo | 6 | `round6` | `custoUnitario`, `precoUnitario`, `custoMedio`, `ultimoCusto`, `custoReposicao` e `precoMercado` do insumo (BE-29), `custoUnitario` da compra |
 | Custo unitário e preço | 4 | `round4` | `custoUnitario` e `precoSugerido` da receita, as partes por unidade de `custo`, `preco` e os `valor` da `composicao` de `precos` (BE-28), `custo_por_unidade`, `custo_total_unitario`, `preco_sugerido`, `lucro_por_unidade`, `custoUnitario` e `precoVenda` da simulação, `custoUnitario` da produção e do item de venda |
 | Totais em reais | 2 | `round2` | `custoCalculado` do item, `custoProducao`, `custo.ingredientesLote` e `custo.gastosMensaisLote` (BE-28), `custo_invisivel`, `custo_total_producao`, `lucroEstimado`, `custoTotal` e `valorRateado` da produção, `total` da venda |
-| Frações (margens e percentuais) | 4 | `round4` | `margemProjetada` da simulação (eram 2 casas), `margemRealizada` da venda, `margemLucro` e `lucroPercentual` da receita (BE-27), `percentuais` e as `fracao` da `composicao` (BE-28) |
+| Frações (margens e percentuais) | 4 | `round4` | `margemProjetada`, `lucroReal` e `percentuaisSemLucro` da simulação (eram 2 casas; os dois últimos, BE-31), `indiceMargemContribuicao` do resumo de vendas (BE-31), `margemRealizada` da venda, `margemLucro` e `lucroPercentual` da receita (BE-27), `percentuais` e as `fracao` da `composicao` (BE-28) |
 
 Exemplo (critério da BE-23): farinha 1 kg a R$ 3,00/kg, sal 0,02 kg a R$ 2,50/kg e fermento 15 g a R$ 0,017/g dão custo de ingredientes **R$ 3,305** (`custoIngredientes` de `calcularCustoReceita`), não R$ 3,31 da soma de itens arredondados. Com rendimento 50, o custo unitário é R$ 0,0661 (era R$ 0,07).
 
 - Valores digitados (`valorPago`, `valorTotal` e `quantidade` da compra, `valor` do gasto, `preco_unitario_real`, quantidades, `usoPorLote`, `embalagemPorUnidade` e `perdaPercentual` da receita) voltam como vieram.
 - Quantidades de estoque e saldos continuam com `round6` ao gravar (não são custo nem preço).
-- O break-even da simulação é `Math.ceil` de `round6(custo × volume / preço)`: o `round6` só tira o ruído do ponto flutuante (`0.1 × 3 / 0.1` dá `3.0000000000000004`, e o teto daria 4).
+- O ponto de equilíbrio do produto (BE-31) e o `breakEven` legado da simulação são unidades inteiras: `Math.ceil` de um valor passado antes pelo `round6`, que só tira o ruído do ponto flutuante (`0.1 × 3 / 0.1` dá `3.0000000000000004`, e o teto daria 4).
 - Os services exportados para outros módulos devolvem os valores **sem arredondar**, não o DTO de resposta: `InsumoService.buscarVariosDaEmpresa` devolve os insumos como estão no banco (com `custoMedio`, `ultimoCusto` e `precoMercado` sem arredondar) e `ReceitaService.buscarDaEmpresa`, a receita com os itens e o custo de 1 lote calculado na leitura (BE-27).
 - Cálculo em `number` (`double`), sem biblioteca de decimal: com ~15 dígitos significativos, o erro do ponto flutuante fica muito abaixo das 4 ou 6 casas da resposta, e o arredondamento o elimina.
 
@@ -210,7 +210,7 @@ Detalhamento na resposta da receita (`custo`): `ingredientesLote` e `gastosMensa
 - **Custo invisível (lacuna 18):** soma **todos** os gastos indiretos da empresa. **Muda (BE-26):** cada gasto entra pelo [tipo](#gastos-indiretos-e-rateio): o mensal dividido pela capacidade mensal e multiplicado pelo `usoPorLote` (BE-27), o por unidade multiplicado pelas unidades e o percentual de venda fora do custo (entra no preço, BE-28). Antes, o Aluguel de R$ 1.800 `FIXO` subia R$ 1.800 o custo de cada receita; agora sobe R$ 45 com a capacidade padrão de 40.
 - O resultado do custo invisível precisa ser finito e ≥ 0, senão 400 (`obterCustoInvisivel`). Com valores ≥ 0 validados no cadastro, isso não acontece, e o monolito não repete a conferência.
 - Rendimento ≤ 0 → 400 `RENDIMENTO_INVALIDO` "Rendimento da receita deve ser maior que zero" (`validarRendimento`). O DTO já exige inteiro positivo.
-- Funções puras em `receitas/domain/receitas.calculos.ts`: `calcularCustoItem`, `calcularCustoInvisivel(gastos, rendimento, capacidadeMensal, lotes = 1, usoPorLote = 1)` (usa `calcularGastoNoCusto` de `gastos-indiretos`), `somarGastosMensaisLote`, `somarGastosPorUnidade`, `somarGastosPercentuais`, `calcularCustoUnitario` e `calcularCustoReceita` (`lotes`, `usoPorLote`, `embalagemPorUnidade` e `perdaPercentual` opcionais; devolve também `lotes`, `totalUnidades` e o `detalhe` do custo unitário) (BE-28); `calcularPreco` e `calcularPrecoNoCanal` ([preço por canal](#preço-por-canal), BE-28); `simularCenario` e `calcularPrecoVenda` (BE-10); e as da [ficha técnica](#ficha-técnica) (BE-27). O service busca os insumos por `InsumoService.buscarVariosDaEmpresa`, os gastos por `GastoIndiretoService.listarPorEmpresa`, a configuração por `ConfiguracaoCustosService.buscarDaEmpresa` e os canais ativos por `CanalVendaService.listarAtivosDaEmpresa`, uma vez por requisição (também na listagem), sem HTTP.
+- Funções puras em `receitas/domain/receitas.calculos.ts`: `calcularCustoItem`, `calcularCustoInvisivel(gastos, rendimento, capacidadeMensal, lotes = 1, usoPorLote = 1)` (usa `calcularGastoNoCusto` de `gastos-indiretos`), `somarGastosMensaisLote`, `somarGastosPorUnidade`, `somarGastosPercentuais`, `calcularCustoUnitario` e `calcularCustoReceita` (`lotes`, `usoPorLote`, `embalagemPorUnidade` e `perdaPercentual` opcionais; devolve também `lotes`, `totalUnidades` e o `detalhe` do custo unitário) (BE-28); `calcularPreco` e `calcularPrecoNoCanal` ([preço por canal](#preço-por-canal), BE-28); `simularCenario` (BE-10, BE-31), `calcularMargemContribuicao`, `calcularPontoEquilibrioProduto` e `somarGastosMensais` ([simulação e ponto de equilíbrio](#simulação-e-ponto-de-equilíbrio), BE-31) e `calcularPrecoVenda` (BE-10); e as da [ficha técnica](#ficha-técnica) (BE-27). O service busca os insumos por `InsumoService.buscarVariosDaEmpresa`, os gastos por `GastoIndiretoService.listarPorEmpresa`, a configuração por `ConfiguracaoCustosService.buscarDaEmpresa` e os canais ativos por `CanalVendaService.listarAtivosDaEmpresa`, uma vez por requisição (também na listagem), sem HTTP.
 - **Muda (BE-27):** o lucro é o da receita ou, sem ele, o `lucroPadrao` da empresa. A resposta traz ainda `margemLucro` derivada (`lucro ÷ (1 − lucro)`, o markup equivalente), para o frontend atual; ela é omitida só quando não há preço. **Muda (BE-28):** `precoSugerido` é o preço do Balcão ([preço por canal](#preço-por-canal)), não mais `custo ÷ (1 − lucro)`; a `margemLucro` continua sendo a do lucro configurado (para o formulário reenviá-la sem mudar o lucro), e por isso `custoUnitario × (1 + margemLucro)` só é o `precoSugerido` sem imposto, maquininha nem gastos `PERCENTUAL_VENDA`.
 - Validação do corpo (`create-receita.dto.ts`): nome até 80, `rendimento` inteiro > 0, `quantidade` do item ≥ 0.001, `insumo_id` inteiro > 0. **Muda (BE-09):** a lista de insumos não pode ser vazia (400), os insumos precisam ser da empresa (404 `INSUMO_NAO_ENCONTRADO`), e o nome passa a ser aparado e obrigatório (como o do insumo e o do gasto).
 - Receita inexistente ou de outra empresa → 404 `RECEITA_NAO_ENCONTRADA` "Receita não encontrada". Listagem por `dataCriacao` decrescente (e `id` no empate); itens na ordem em que foram informados.
@@ -263,26 +263,54 @@ Origem: `custo.service.ts` (`calcularPorReceita`, `simularPorReceita`) e `custos
 - `quantidadeLotes` inteiro > 0 (400 senão). `GET` responde 200 e o `POST` 201. Receita de outra empresa → 404. Não grava nada.
 - Service: `ReceitaService.calcularCusto(id, lotes, empresaId)`; resposta montada por `toReceitaCustoDto`.
 
-### Simulação de cenário e break-even
+### Simulação e ponto de equilíbrio
 
-Origem: `recipe-service/src/modules/custos/application/services/simulacao.service.ts` e `simular-cenario.dto.ts`.
+Origem: `recipe-service/src/modules/custos/application/services/simulacao.service.ts` e `simular-cenario.dto.ts`. **Muda (BE-31):** o break-even de lá (`ceil(custo × volume ÷ preço)`) não diz quanto vender para pagar as contas do mês. A simulação passa a receber o preço praticado, o canal e o volume do mês, e devolve o lucro real e o ponto de equilíbrio pela margem de contribuição.
 
 ```
-custo        = novoCusto ?? receita.custoUnitario        // calculado na leitura (BE-27)
-preco        = novoPreco ?? receita.precoSugerido        // calculado na leitura; ausente → 400
-volume       = volume ?? receita.rendimento
-margemUnit   = preco − custo
-lucroEstimado   = margemUnit × volume
-margemProjetada = margemUnit / preco                     // fração
-breakEven       = Math.ceil(round6((custo × volume) / preco))   // unidades; o round6 só tira o ruído do ponto flutuante
-resposta     = { custoUnitario: round4(custo), precoVenda: round4(preco), volume, lucroEstimado: round2(…), margemProjetada: round4(…), breakEven }
+canal                 = canalId ?? Balcão da empresa                              // CanalVendaService.buscarParaVenda (ativo ou não)
+custo                 = custo da receita na leitura (reposição dos insumos, BE-29)
+percentuaisSemLucro   = imposto + taxaDoCanal(canal) + Σ gastos PERCENTUAL_VENDA    // calcularPercentuaisSemLucro (BE-30)
+preco                 = novoPreco ?? preço sugerido no canal                       // calcularPrecoNoCanal; sem preço → 400
+volume                = volume ?? receita.rendimento                              // unidades no mês
+custoUnitario         = novoCusto ?? custo.custoUnitario
+custoSemGastosMensais = novoCusto ausente ? custo.custoSemGastosMensais
+                                          : max(0, novoCusto − (custo.custoUnitario − custo.custoSemGastosMensais))
+gastosMensais         = Σ gastos MENSAL da empresa                                // somarGastosMensais
+MCu                   = preco − custoSemGastosMensais − percentuaisSemLucro × preco   // calcularMargemContribuicao
+lucroPorUnidade       = preco − custoUnitario − percentuaisSemLucro × preco
+lucroReal             = lucroPorUnidade ÷ preco                                   // fração do preço, como o lucro da venda (BE-30)
+lucroMes              = lucroPorUnidade × volume
+pontoEquilibrio       = MCu ≤ 0 ? { unidades: null, motivo: MARGEM_NEGATIVA }
+                                : { unidades: ceil(round6(gastosMensais ÷ MCu)), motivo: null }   // calcularPontoEquilibrioProduto
 ```
 
-- Mensagens atuais (400): "Receita sem custo calculado. Informe novoCusto para simular." (`RECEITA_SEM_CUSTO`) e "Receita sem preço sugerido definido. Informe novoPreco para simular." (`RECEITA_SEM_PRECO`).
-- `novoCusto` e `novoPreco` > 0 e `volume` inteiro > 0, quando informados.
-- **Muda (BE-10, lacuna 27):** preço igual a 0 (só acontece com o `precoSugerido` igual a 0, de uma receita sem custo) → 400 `PRECO_INVALIDO` "Preço de venda deve ser maior que zero. Informe novoPreco para simular.", em vez de devolver `NaN`.
-- **Muda (BE-23):** custo e preço com 4 casas (eram 2) e `margemProjetada` com 4 casas (eram 2); o arredondamento fica no `toSimulacaoCenarioDto`.
-- Função pura `simularCenario(entrada, receita)`, sem arredondar; não grava nada. Responde 201.
+- `custoSemGastosMensais` é o custo variável da unidade: `(ingredientes + embalagem + gastosPorUnidade) ÷ (1 − perda)`, o `custoUnitario` sem a parte dos gastos `MENSAL` (`calcularCustoUnitario` devolve os dois). A margem de contribuição é o que cada unidade deixa para pagar os gastos do mês.
+- **Ponto de equilíbrio do produto**: unidades por mês para pagar **todos** os gastos mensais "se só vendesse este produto", arredondado para cima (o `round6` tira o ruído do ponto flutuante antes do teto). `MCu ≤ 0` (comparado com `round6`) → `unidades: null` com motivo `MARGEM_NEGATIVA`: nenhuma quantidade paga os gastos. Sem gastos mensais, 0.
+- O lucro real está na mesma base do lucro do preço: **pelo preço sugerido do canal, o `lucroReal` é o lucro configurado** (critério da BE-31). Exemplo: o pão francês da BE-28 no Balcão, a R$ 0,6961 (maquininha de 1,36%), tem lucro real de 15%, custo variável de `3,305 ÷ 50 ÷ 0,95` = R$ 0,0696, MCu de `0,6961 × 0,9864 − 0,0696` ≈ R$ 0,617 e ponto de equilíbrio de `2.435 ÷ 0,617` = **3.947 pães por mês**.
+- `novoCusto` troca o custo unitário; o custo variável perde a mesma parte dos gastos mensais que a receita tem (nunca fica abaixo de 0).
+- Resposta (`toSimulacaoCenarioDto`): custos, preço, MCu e lucro por unidade com 4 casas; `percentuaisSemLucro` e `lucroReal` (frações) com 4; `lucroMes` e `gastosMensais` com 2; `canalId` e `canal` (nome). Os campos antigos continuam pelo schema atual do frontend: `lucroEstimado` = `lucroMes` e `margemProjetada` = `lucroReal` (**mudam**: agora descontam imposto, taxa e gastos percentuais), e `breakEven` = `ceil(round6(custoUnitario × volume ÷ preco))`, **legado**, que sai com a BE-33 (o frontend passa a usar o `pontoEquilibrio`).
+- Mensagens (400): "Receita sem preço sugerido definido. Informe novoPreco para simular." (`RECEITA_SEM_PRECO`, quando os percentuais do canal passam de 100% e não há `novoPreco`) e, **muda (BE-10, lacuna 27)**, preço igual a 0 (receita sem custo nenhum) → `PRECO_INVALIDO` "Preço de venda deve ser maior que zero. Informe novoPreco para simular.", em vez de `NaN`. O `RECEITA_SEM_CUSTO` saiu da simulação: desde a BE-27 o custo é sempre calculado.
+- `novoCusto` e `novoPreco` > 0, `volume` e `canalId` inteiros > 0, quando informados. Canal de outra empresa → 404 `CANAL_VENDA_NAO_ENCONTRADO`.
+- Funções puras em `receitas.calculos.ts`: `simularCenario(entrada, receita)`, `calcularMargemContribuicao`, `calcularPontoEquilibrioProduto` e `somarGastosMensais`, sem arredondar (menos as unidades); não grava nada. Responde 201.
+
+#### Ponto de equilíbrio da empresa
+
+**Novo (BE-31).** `GET /vendas/resumo`, para o painel: o faturamento por mês que paga os gastos mensais, com o mix das vendas **concluídas** dos últimos 30 dias (`dataVenda ≥ agora − 30 dias`).
+
+```
+para cada item vendido:
+  receita_item = quantidade × precoUnitarioReal
+  MC_item      = quantidade × calcularMargemContribuicao(precoUnitarioReal, receita.custo.custoSemGastosMensais, percentuais da venda)
+indiceMC        = Σ MC_item ÷ Σ receita_item
+pontoEquilibrio = Σ receita = 0 ? { valor: null, motivo: SEM_VENDAS }
+                : Σ MC ≤ 0     ? { valor: null, motivo: MARGEM_NEGATIVA }
+                : { valor: gastosMensais ÷ indiceMC, motivo: null }                 // calcularPontoEquilibrioEmpresa (vendas.calculos.ts)
+```
+
+- O custo variável de cada receita é o **atual**, com o custo médio dos insumos (`ReceitaService.buscarDaEmpresa`, como a venda, BE-30).
+- Os percentuais (imposto, taxa do canal e gastos `PERCENTUAL_VENDA`) são os **da venda**, tirados do que ela gravou: `1 − custoUnitario ÷ preco − lucroReal` (`percentuaisSemLucroDaVenda`). Assim a taxa é a do canal da venda mesmo com o canal alterado ou excluído. Venda anterior à BE-30 (sem `lucroReal`) usa os percentuais atuais do Balcão.
+- Resposta (`toResumoVendasDto`): `receita`, `margemContribuicao`, `gastosMensais` e `pontoEquilibrio.valor` com 2 casas; `indiceMargemContribuicao` com 4 (`null` sem vendas); `dias`, `dataInicio` e `vendas` (quantas vendas entraram).
 
 ### Preço por canal
 
@@ -419,7 +447,7 @@ A lista numerada está em [`lucroai-frontend/docs/api-integration.md#lacunas-do-
 | 1 | DTOs sem `@ApiProperty` | corrigida | BE-04 | CLI plugin do Swagger documenta os DTOs pelos tipos e pelo JSDoc |
 | 2 | sem prefixo `/v1` | mantida | BE-04 | é o contrato do frontend; sem `enableVersioning` |
 | 3 | sem `refresh`, `logout` nem `/auth/me` | mantida | BE-06 | o frontend não usa; a sessão vem do payload do JWT de 4 h |
-| 4 | sem endpoint de painel | mantida | — | o frontend calcula o painel no cliente; criar a rota pede uma issue própria |
+| 4 | sem endpoint de painel | corrigida em parte | BE-31 | `GET /vendas/resumo` traz o ponto de equilíbrio da empresa; o resto do painel o frontend continua calculando no cliente |
 | 5 | sem listagem de estoque | corrigida | BE-07, BE-11 | `quantidadeMinima` no `Insumo` e `GET /estoque/insumos` |
 | 6 | estoque de produto acabado não exposto | corrigida | BE-12 | `GET /estoque/produtos` |
 | 7 | filtro de data das vendas com `YYYY-MM-DD` | corrigida | BE-13 | só aceita data e hora ISO 8601 completas, comparadas como instantes (o formato que a web já envia) |
