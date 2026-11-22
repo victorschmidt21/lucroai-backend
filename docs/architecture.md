@@ -38,10 +38,11 @@ Cada tabela pertence a **um** módulo, e só ele lê e escreve nela pelo Prisma.
 
 | Módulo | Tabelas (models) | Responsabilidade | Depende de | Issues |
 | --- | --- | --- | --- | --- |
-| `auth` | `Empresa`, `Usuario` | cadastro de empresa (com a configuração de custos padrão na mesma transação), login e JWT (assinado com o `JwtService` do `JwtAuthModule`); não exporta service | `configuracao-custos` | BE-06, BE-24 |
+| `auth` | `Empresa`, `Usuario` | cadastro de empresa (com a configuração de custos e os canais de venda padrão na mesma transação), login e JWT (assinado com o `JwtService` do `JwtAuthModule`); não exporta service | `configuracao-custos`, `canais` | BE-06, BE-24, BE-25 |
 | `estoque` | `Estoque`, `MovimentacaoEstoque`, `EstoqueProdutoAcabado`, `MovimentacaoProdutoAcabado` | saldo e histórico de insumos e de produto acabado; exporta `EstoqueService` (`criarRegistroInicial` e `saldosPorInsumo` desde a BE-07; `baixarPorProducao(itens, lotes, producaoId, empresaId, tx)` desde a BE-11) e `EstoqueProdutoAcabadoService` (`entradaPorProducao(receitaId, totalUnidades, producaoId, empresaId, tx)` e `saidaPorVenda(receitaId, quantidade, vendaId, empresaId, tx)` desde a BE-12) | — | BE-07, BE-11, BE-12 |
 | `insumos` | `Insumo` | cadastro de insumos e custo unitário; cria o estoque inicial na mesma transação; exporta `InsumoService` (`buscarVariosDaEmpresa` desde a BE-09) | `estoque` | BE-07 |
 | `configuracao-custos` | `ConfiguracaoCustos` | configuração de custos da empresa (base de rateio, capacidade mensal, lucro, imposto e maquininha), com os padrões e a validação (`validarConfiguracaoCustos`); exporta `ConfiguracaoCustosService` (`criarPadrao(empresaId, tx)`) | — | BE-24 |
+| `canais` | `CanalVenda` | canais de venda com comissão (Balcão, iFood…), CRUD em `/canais`, com os padrões (`CANAIS_PADRAO`) e a regra do Balcão (`garantirCanalExcluivel`); exporta `CanalVendaService` (`criarPadrao(empresaId, tx)`) | — | BE-25 |
 | `gastos-indiretos` | `GastoIndireto` | cadastro de gastos e cálculo do rateio (`calcularValorRateado`); exporta `GastoIndiretoService` (`listarPorEmpresa` e `buscarVariosDaEmpresa`) | — | BE-08 |
 | `receitas` | `Receita`, `ItemReceita` | receitas, custo para 1 ou N lotes (`calcularCustoReceita`), simulação (`simularCenario`) e preço de venda (`calcularPrecoVenda`), sem gravar; exporta `ReceitaService` (`buscarDaEmpresa`) | `insumos`, `gastos-indiretos` | BE-09, BE-10 |
 | `producoes` | `Producao`, `RateioProducao` | produção com rateio (`calcularProducao`), baixa de insumos e entrada de produto acabado, numa transação só; não exporta service | `receitas`, `gastos-indiretos`, `estoque` | BE-12 |
@@ -56,6 +57,7 @@ Schema em `prisma/schema.prisma`, migration inicial `init` (BE-05). Toda tabela 
 | `empresa` (`Empresa`) | `auth` | — |
 | `usuario` (`Usuario`) | `auth` | `empresa_id` (`CASCADE`) |
 | `configuracao_custos` (`ConfiguracaoCustos`) | `configuracao-custos` | `empresa_id` (único) |
+| `canal_venda` (`CanalVenda`) | `canais` | `empresa_id` |
 | `insumo` (`Insumo`) | `insumos` | `empresa_id` |
 | `gasto_indireto` (`GastoIndireto`) | `gastos-indiretos` | `empresa_id` |
 | `receita` (`Receita`) | `receitas` | `empresa_id` |

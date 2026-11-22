@@ -50,7 +50,7 @@ Valores e quantidades são `Float` no banco (`double precision`) e `number` na A
 
 Origem: `auth-service/src/modules/auth/application/services/auth.service.ts` e `auth.module.ts`.
 
-- Cadastro (`POST /auth/empresa`) cria empresa, usuário e a [configuração de custos](#configuração-de-custos) padrão (BE-24) na mesma transação. CNPJ já cadastrado → 409 `CNPJ_JA_CADASTRADO` "CNPJ já cadastrado"; e-mail já cadastrado → 409 `EMAIL_JA_CADASTRADO` "E-mail já cadastrado". Com os dois repetidos, vale o do CNPJ (a empresa é criada antes do usuário, como a ordem das conferências de hoje). A duplicidade é detectada pelo índice único do banco (`P2002`), o que também cobre dois cadastros simultâneos.
+- Cadastro (`POST /auth/empresa`) cria empresa, usuário e a [configuração de custos](#configuração-de-custos) padrão (BE-24) e os [canais de venda](#canais-de-venda) padrão (BE-25) na mesma transação. CNPJ já cadastrado → 409 `CNPJ_JA_CADASTRADO` "CNPJ já cadastrado"; e-mail já cadastrado → 409 `EMAIL_JA_CADASTRADO` "E-mail já cadastrado". Com os dois repetidos, vale o do CNPJ (a empresa é criada antes do usuário, como a ordem das conferências de hoje). A duplicidade é detectada pelo índice único do banco (`P2002`), o que também cobre dois cadastros simultâneos.
 - **Muda (BE-06):** `cnpj` e `nome_usuario` são opcionais; sem valor, ficam `null` no banco e no payload.
 - Senha com `argon2` (hash no cadastro, `verify` no login). E-mail inexistente e senha errada dão a **mesma** resposta: 401 `CREDENCIAIS_INVALIDAS` "Credenciais inválidas". Com e-mail inexistente, o login confere a senha contra um hash fictício, para o tempo de resposta não revelar quais e-mails existem.
 - JWT HS256, validade de **4 h**, payload `{ sub, email, nome, empresa: { id, nome, cnpj, segmento } }`. O frontend lê esse payload: não mude os nomes.
@@ -94,6 +94,21 @@ custoUnitario = quantidadeBaseCusto > 0 ? valorPago / quantidadeBaseCusto : 0
 - Validação (`validarConfiguracaoCustos`), feita depois de mesclar o `PUT` com os valores salvos: `capacidadeMensal > 0`; `lucroPadrao`, `impostoPercentual` e `taxaMaquininha` entre 0 e 1, inclusive. Erro → 400 `DADOS_INVALIDOS`, um `details` por campo, no formato do `ValidationPipe`.
 - Os valores são gravados e devolvidos como vieram, sem arredondar.
 - Sem pró-labore, regime tributário, anexo do Simples nem faturamento: decisão de simplicidade da BE-24. Como os campos entram no custo e no preço é das issues seguintes do E7 (BE-28).
+
+## Canais de venda
+
+**Novo (BE-25).** Canais por onde a empresa vende (tabela `canal_venda`), cada um com a comissão que cobra sobre o preço, para o preço por canal das issues seguintes do E7. Não existe nos microsserviços.
+
+| Canal padrão | `comissaoPercentual` | `ativo` | Por quê |
+| --- | --- | --- | --- |
+| Balcão | 0 | sim | a taxa da maquininha vem da [configuração de custos](#configuração-de-custos) (`taxaMaquininha`) |
+| iFood | 0,152 | não | 12% do plano básico + 3,2% do pagamento online |
+| iFood com entrega | 0,262 | não | 23% do plano com entrega + 3,2% |
+
+- A comissão é fração do **preço de venda**, entre 0 e 1, gravada e devolvida sem arredondar.
+- Os padrões ficam em `CANAIS_PADRAO` (`canais/domain/canais.calculos.ts`). Nascem no cadastro da empresa (`CanalVendaService.criarPadrao(empresaId, tx)`, chamado pelo `auth` na transação do cadastro), no seed (que os recria) e, para as empresas que já existiam, na migration `criar_canal_venda`. Todos são editáveis.
+- O Balcão é marcado pela coluna `balcao` (o nome pode mudar), que a API não deixa alterar e que canal criado pelo `POST` nunca tem. Excluir o Balcão → 422 `CANAL_BALCAO_NAO_EXCLUIVEL` "O canal Balcão não pode ser excluído" (`garantirCanalExcluivel`). Desativá-lo é permitido: a issue só proíbe a exclusão.
+- Os outros canais podem ser excluídos (nada os referencia ainda).
 
 ## Gastos indiretos e rateio
 
