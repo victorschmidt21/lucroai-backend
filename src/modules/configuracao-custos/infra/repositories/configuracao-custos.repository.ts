@@ -8,8 +8,12 @@ import type { ConfiguracaoCustosValores } from '../../domain/configuracao-custos
 export class ConfiguracaoCustosRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  findByEmpresa(empresaId: number): Promise<ConfiguracaoCustos | null> {
-    return this.prisma.configuracaoCustos.findUnique({ where: { empresaId } });
+  findByEmpresa(
+    empresaId: number,
+    tx?: PrismaTransaction,
+  ): Promise<ConfiguracaoCustos | null> {
+    const db = tx ?? this.prisma;
+    return db.configuracaoCustos.findUnique({ where: { empresaId } });
   }
 
   create(

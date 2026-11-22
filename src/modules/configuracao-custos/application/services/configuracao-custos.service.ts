@@ -48,10 +48,21 @@ export class ConfiguracaoCustosService {
     );
   }
 
+  /** Para outros módulos (receitas, produções): a configuração da empresa. */
+  async buscarDaEmpresa(
+    empresaId: number,
+    tx?: PrismaTransaction,
+  ): Promise<ConfiguracaoCustosDto> {
+    return toConfiguracaoCustosDto(await this.getOrFail(empresaId, tx));
+  }
+
   // Toda empresa tem configuração (cadastro, seed e a migration que a criou
   // para as empresas antigas); o 404 só protege contra um banco inconsistente.
-  private async getOrFail(empresaId: number): Promise<ConfiguracaoCustos> {
-    const row = await this.repository.findByEmpresa(empresaId);
+  private async getOrFail(
+    empresaId: number,
+    tx?: PrismaTransaction,
+  ): Promise<ConfiguracaoCustos> {
+    const row = await this.repository.findByEmpresa(empresaId, tx);
     if (!row) {
       throw new NotFoundError(
         'CONFIGURACAO_CUSTOS_NAO_ENCONTRADA',
