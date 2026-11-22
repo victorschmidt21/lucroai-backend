@@ -45,9 +45,18 @@ npm run start:dev
 
 ## Dados de demonstração
 
-`npm run db:seed` cria a **Padaria Pão Feliz Ltda** com 12 insumos (3 abaixo do mínimo), 4 gastos indiretos, 4 receitas, 4 produções e 8 vendas (concluídas, uma pendente e uma cancelada) espalhadas pelos últimos 6 meses. Login: **`joao@padariapaofeliz.com.br` / `123456`** (ou `maria@padariapaofeliz.com.br`, mesma senha), com os dados na mesma empresa.
+`npm run db:seed` cria a **Padaria Pão Feliz Ltda** com o cálculo de custo e preço do épico E7. Login: **`joao@padariapaofeliz.com.br` / `123456`** (ou `maria@padariapaofeliz.com.br`, mesma senha), com os dados na mesma empresa.
 
-O seed (`prisma/seed.ts`) é idempotente: apaga e recria os dados da empresa do seed (achada pelo CNPJ), sem tocar nas outras. Os custos são calculados com as funções de `domain/` dos módulos, então batem com os da API (ex.: Pão Francês com custo de produção R$ 69,18, unitário R$ 1,3836 e preço sugerido R$ 2,2138). Recusa rodar com `NODE_ENV=production`. Com Docker: `docker compose exec api npm run db:seed`.
+| O quê | Seed |
+| --- | --- |
+| Configuração de custos | rateio por fornadas, 100 fornadas por mês, lucro padrão de 15%, imposto 0 e maquininha de 1,36% |
+| Canais | Balcão e iFood (15,2%) ativos; iFood com entrega (26,2%) inativo |
+| Gastos | aluguel, luz, gás e DAS do MEI como `MENSAL` (R$ 2.515 por mês); saquinho de papel como `POR_UNIDADE` (R$ 0,05) |
+| Insumos | 12, cada um com a compra inicial; 3 abaixo do mínimo; compras novas de farinha e açúcar (custo médio ≠ último custo) e um preço de mercado na manteiga, que aparece em `GET /alertas` como preço defasado |
+| Receitas | 4, com uso de forno, embalagem e perda; o Pão Francês rende 28 pães por kg de farinha e custa cerca de **R$ 0,38**, com preço de **R$ 0,46** no Balcão e R$ 0,55 no iFood |
+| Produções e vendas | 4 produções e 9 vendas (concluídas, uma pendente e uma cancelada) nos últimos 6 meses, no Balcão e no iFood, com o lucro real gravado |
+
+O seed (`prisma/seed.ts`) é idempotente: apaga e recria os dados da empresa do seed (achada pelo CNPJ), sem tocar nas outras. Os custos são calculados com as funções de `domain/` dos módulos, então batem com os da API. Recusa rodar com `NODE_ENV=production`. Com Docker: `docker compose exec api npm run db:seed`.
 
 ## Scripts
 

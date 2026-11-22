@@ -101,9 +101,69 @@ Observações:
 - `/canais` (BE-25): campos em `camelCase`. `nome` texto aparado, não vazio, até 100 caracteres; `comissaoPercentual` número finito entre 0 e 1 (fração do preço); `ativo` booleano, omitido no `POST` → `true`. No `PUT`, campo omitido mantém o valor salvo, e ativar ou desativar é `{ "ativo": true | false }` (vale também para o Balcão). `balcao` só de leitura. `GET /canais` lista em ordem de criação (Balcão primeiro). Excluir o Balcão → 422 `CANAL_BALCAO_NAO_EXCLUIVEL`; canal de outra empresa no `PUT` e no `DELETE` → 404 `CANAL_VENDA_NAO_ENCONTRADO`.
 - `PATCH /vendas/:id/status`: `status` do enum `StatusVenda`. Venda já `CONCLUIDA` ou `CANCELADA` → 422 `VENDA_FINALIZADA`; `PENDENTE` → `PENDENTE` → 422 `TRANSICAO_INVALIDA`; concluir sem saldo de produto acabado → 422 `ESTOQUE_INSUFICIENTE` e nada é gravado (a venda continua `PENDENTE`).
 
+## Mudanças de contrato do épico E7
+
+O épico E7 (BE-23 a BE-33, cálculo de custo e preço) mudou o contrato **só de forma aditiva**: nenhuma rota ou campo que o frontend atual usa foi removido ou renomeado, e o teste de contrato continua passando com a cópia dos schemas do frontend (commit `b4ebbd9`). Mas alguns campos antigos **mudaram de significado**, e os campos legados só existem para o frontend atual. Esta é a lista para as issues do frontend (FE-41 a FE-47); as fórmulas estão em [business-rules.md](business-rules.md).
+
+### Rotas novas
+
+| Rota | Resposta | Issue |
+| --- | --- | --- |
+| `GET` e `PUT /configuracao-custos` | `ConfiguracaoCustos` | BE-24 |
+| `GET`, `POST /canais`, `PUT` e `DELETE /canais/:id` | `CanalVenda` | BE-25 |
+| `GET` e `POST /insumos/:id/compras` | `CompraInsumo` | BE-29 |
+| `GET /vendas/resumo` | `ResumoVendas` (ponto de equilíbrio da empresa) | BE-31 |
+| `GET /alertas` | `Alertas` (estoque negativo e preço defasado) | BE-32 |
+
+### Campos novos
+
+| Onde | Campo | Issue |
+| --- | --- | --- |
+| corpo de `POST`/`PUT /gastos-indiretos`; `GastoIndireto` | `tipo` (`MENSAL`, `POR_UNIDADE`, `PERCENTUAL_VENDA`) | BE-26 |
+| corpo de `POST`/`PUT /receitas`; `Receita` | `uso_por_lote`, `embalagem_por_unidade`, `perda_percentual`, `lucro_percentual` (`usoPorLote`, `embalagemPorUnidade`, `perdaPercentual`, `lucroPercentual` na resposta) | BE-27 |
+| `Receita` | `custo` (detalhamento por unidade) e `precos` (um por canal ativo, com `composicao`) | BE-28 |
+| corpo de `PATCH /insumos/:id`; `Insumo` | `precoMercado`; na resposta também `custoMedio`, `ultimoCusto`, `custoReposicao` e `precoMercadoData` | BE-29 |
+| `MovimentacaoEstoque` | `referenciaId` com o id da compra nas entradas por compra | BE-29 |
+| corpo de `POST /vendas`; `Venda` | `canal_id` (`canalId` na resposta); `lucroReal` em cada item | BE-30 |
+| corpo de `POST /receitas/:id/simular`; `SimulacaoCenario` | `canalId`; na resposta também `canal`, `custoSemGastosMensais`, `percentuaisSemLucro`, `margemContribuicao`, `lucroPorUnidade`, `lucroReal`, `lucroMes`, `gastosMensais` e `pontoEquilibrio` | BE-31 |
+| `Insumo` e `Estoque` | `estoqueNegativo` | BE-32 |
+
+### Campos que mudaram de significado
+
+| Campo | Antes | Agora | Issue |
+| --- | --- | --- | --- |
+| números de custo e preço | arredondados no meio da conta | exatos no banco, arredondados só na resposta (6, 4 ou 2 casas) | BE-23 |
+| `Receita.custoProducao`, `custoUnitario`, `precoSugerido`, `itens[].custoCalculado` | gravados ao salvar a receita | calculados na leitura, com os custos atuais | BE-27 |
+| `Receita.custoUnitario` | ingredientes + gastos do mês inteiros por lote | ingredientes, gastos mensais ÷ capacidade × uso de forno, gastos por unidade, embalagem e perda | BE-26, BE-28 |
+| `Receita.precoSugerido` | `custo × (1 + margem)` | preço do Balcão: `custo ÷ (1 − imposto − maquininha − gastos percentuais − lucro)` | BE-28 |
+| `ReceitaCusto.custo_por_unidade`, `custo_total_producao` | sem embalagem e perda | com embalagem e perda | BE-28 |
+| `Insumo.custoUnitario` (e `precoUnitario`) | `valorPago ÷ quantidadeBaseCusto` gravado | custo de reposição (`precoMercado ?? ultimoCusto`) | BE-29 |
+| `Producao.custoTotal`, `custoUnitario`, `rateios` | custo da receita × lotes + rateio de todos os gastos por cima | ingredientes ao custo médio + gastos `MENSAL` do forno, uma vez; só gastos `MENSAL` nos rateios | BE-30 |
+| `Venda.itens[].custoUnitario` | custo gravado na receita | custo da receita com o custo médio dos insumos | BE-30 |
+| `SimulacaoCenario.precoVenda` padrão | preço sugerido gravado | preço sugerido no canal (Balcão sem `canalId`) | BE-28, BE-31 |
+| `SimulacaoCenario.lucroEstimado`, `margemProjetada` | `(preço − custo) × volume` e `(preço − custo) ÷ preço` | `lucroMes` e `lucroReal`: descontam imposto, taxa do canal e gastos percentuais | BE-31 |
+| `PUT /receitas/:id` com `margem_lucro: null` | removia a margem e o preço | volta ao lucro padrão da empresa | BE-27 |
+
+### Campos legados (mantidos)
+
+Continuam na entrada e na resposta **só porque o frontend atual os exige** (conferido no código do frontend em 2026-11-22, commit `b4ebbd9` dos contratos): removê-los quebraria a produção. Cada um sai numa issue posterior, depois que o frontend parar de usá-lo; até lá, a remoção é uma lacuna aberta.
+
+| Campo | Por que o frontend ainda precisa | Substituto | Regra de compatibilidade |
+| --- | --- | --- | --- |
+| `metodo_rateio` (entrada) e `metodoRateio` (`GastoIndireto`) | o formulário envia e `gastoIndiretoSchema` exige `metodoRateio` | `tipo` | `FIXO`/`PROPORCIONAL` → `MENSAL`; `POR_UNIDADE` → `POR_UNIDADE`; a resposta deriva `FIXO` de `MENSAL` e `PERCENTUAL_VENDA` |
+| `margem_lucro` (entrada) e `margemLucro` (`Receita`) | o formulário envia e `receitaSchema` lê `margemLucro` (opcional) | `lucro_percentual` / `lucroPercentual` | `lucro = margem ÷ (1 + margem)`; a resposta mostra `lucro ÷ (1 − lucro)` |
+| `margemRealizada` (`Venda.itens`) | `vendaSchema` exige (`number \| null`) | `lucroReal` | `(preço − custo) ÷ preço`, sem taxas |
+| `breakEven` (`SimulacaoCenario`) | `simulacaoCenarioSchema` exige | `pontoEquilibrio` | `ceil(custo × volume ÷ preço)` |
+| `lucroEstimado`, `margemProjetada` (`SimulacaoCenario`) | `simulacaoCenarioSchema` exige | `lucroMes`, `lucroReal` | iguais aos substitutos (mudaram de significado, acima) |
+| `POST /receitas/:id/preco-venda` | o frontend chama | `precos` da receita | markup sobre o custo, como antes |
+
+### Removidos
+
+Nenhum campo nem rota da API. Saíram só colunas do banco que a API já não expunha como gravadas: `margem_lucro` e as de custo congelado da receita (BE-27), `custo_unitario` do insumo (BE-29) e `metodo_rateio` do gasto, trocada pela `tipo` (BE-26).
+
 ## Teste de contrato
 
-`test/contrato.e2e-spec.ts` (BE-15) é a barreira contra quebra do contrato. Ele roda com `npm run test:e2e` (local no `lucroai_test`; no CI, no Postgres de serviço) e cria os próprios dados com e-mails únicos, então não depende do seed nem de banco limpo. Percorre o fluxo principal (cadastro e login; insumo, gasto e receita; custo, simulação e preço; entrada de estoque e produção; venda, conclusão e conclusão recusada sem saldo), chama todas as rotas da tabela acima, confere o isolamento entre duas empresas (404) e o 401 sem token, e valida cada resposta com os schemas Zod do frontend. Erros são validados contra o [formato padrão](#erros); as rotas novas (`/estoque/produtos`, cadastro de empresa, compras de insumo, `/vendas/resumo`, `/alertas`) e os campos novos da simulação (BE-31) contra schemas locais no próprio teste.
+`test/contrato.e2e-spec.ts` (BE-15) é a barreira contra quebra do contrato. Ele roda com `npm run test:e2e` (local no `lucroai_test`; no CI, no Postgres de serviço) e cria os próprios dados com e-mails únicos, então não depende do seed nem de banco limpo. Percorre o fluxo principal (cadastro e login; insumo, gasto e receita; custo, simulação e preço; entrada de estoque e produção; venda, conclusão e conclusão recusada sem saldo), chama todas as rotas da tabela acima, confere o isolamento entre duas empresas (404) e o 401 sem token, e valida cada resposta com os schemas Zod do frontend. Erros são validados contra o [formato padrão](#erros). O que o frontend ainda não tem schema é validado contra schemas locais no próprio teste: o cadastro de empresa e, do épico E7, as compras de insumo, `/configuracao-custos`, `/canais`, `/vendas/resumo`, `/alertas` e os campos novos de `Insumo`, `GastoIndireto`, `Receita`, `SimulacaoCenario` e `Venda` ([lista](#mudanças-de-contrato-do-épico-e7)). Quando o frontend publicar os schemas desses campos, a cópia os traz e o schema local correspondente sai do teste.
 
 Os schemas ficam em `test/contrato/`, copiados de `lucroai-frontend/src/shared/api/contracts/` (sem os `*.test.ts`). Cada arquivo diz o commit de origem e a data da cópia, e a única mudança é o `.js` nos imports relativos. Para atualizar, com o frontend clonado ao lado:
 
@@ -128,10 +188,10 @@ Arquivo novo em `contracts/` entra na lista do `for`. Se o teste falhar depois d
 | --- | --- |
 | `Insumo` | `id`, `empresaId`, `nome`, `quantidadeBaseCusto`, `quantidadeDisponivel`, `quantidadeMinima` (**novo**), `unidade`, `valorPago`, `custoUnitario`, `precoUnitario` (alias de `custoUnitario`), `dataCriacao`. **Muda (BE-29):** `custoUnitario` é o custo de reposição (`precoMercado ?? ultimoCusto`), e `valorPago`/`quantidadeBaseCusto` são o último preço de referência (cadastro, compra ou `PATCH`). **Novos (BE-29):** `custoMedio`, `ultimoCusto`, `custoReposicao` (6 casas), `precoMercado` e `precoMercadoData` (`null` sem preço de mercado). **Novo (BE-32):** `estoqueNegativo` (`quantidadeDisponivel < 0`), para a indicação visual |
 | `CompraInsumo` (**novo**, BE-29) | `id`, `insumoId`, `quantidade`, `valorTotal`, `custoUnitario` (`valorTotal / quantidade`, 6 casas), `observacao` (`null`), `dataCompra` |
-| `GastoIndireto` | `id`, `empresaId`, `descricao`, `valor`, `tipo` (**novo**, BE-26: `MENSAL \| POR_UNIDADE \| PERCENTUAL_VENDA`), `metodoRateio` (**legado**, derivado do `tipo` para o schema atual do frontend: `FIXO` para `MENSAL` e `PERCENTUAL_VENDA`, `POR_UNIDADE` para `POR_UNIDADE`; sai quando o frontend passar a usar o `tipo`, BE-33) |
+| `GastoIndireto` | `id`, `empresaId`, `descricao`, `valor`, `tipo` (**novo**, BE-26: `MENSAL \| POR_UNIDADE \| PERCENTUAL_VENDA`), `metodoRateio` (**legado**, derivado do `tipo` para o schema atual do frontend: `FIXO` para `MENSAL` e `PERCENTUAL_VENDA`, `POR_UNIDADE` para `POR_UNIDADE`; sai quando o frontend passar a usar o `tipo`, ver [Mudanças do épico E7](#mudanças-de-contrato-do-épico-e7)) |
 | `Receita` | `id`, `empresaId`, `nome`, `rendimento` (inteiro, unidades boas por lote), `unidadeRendimento`, `custoProducao`, `custoUnitario`, `margemLucro`, `precoSugerido`, `usoPorLote` (**novo**), `embalagemPorUnidade` (**novo**), `perdaPercentual` (**novo**), `lucroPercentual` (**novo**, omitido quando a receita usa o lucro padrão), `dataCriacao`, `itens: [{ insumoId, quantidade, custoCalculado }]`. **Muda (BE-27):** custo e preço são calculados na leitura, com os custos atuais (não são mais gravados), e por isso sempre vêm; o preço usa o lucro sobre o preço da receita ou o `lucroPadrao` da empresa. `margemLucro` é **legada**, derivada do lucro (`lucro ÷ (1 − lucro)`), e `margemLucro`/`precoSugerido` só são omitidos quando não há preço possível. **Muda (BE-28):** `custoUnitario` inclui embalagem e perda, `custoProducao = custoUnitario × rendimento`, e `precoSugerido` é o preço do **Balcão** (com imposto, maquininha, gastos `PERCENTUAL_VENDA` e lucro; omitido com percentuais ≥ 100%). **Novos (BE-28):** `custo: { ingredientesLote, gastosMensaisLote, ingredientes, gastosMensais, gastosPorUnidade, embalagem, perdas, unitario }` (lote com 2 casas, por unidade com 4) e `precos: [{ canalId, canal, balcao, percentuais, preco, motivo, composicao }]`, um por canal **ativo** em ordem de criação: `preco` e `motivo` sempre presentes (`preco: null` com `motivo: "PERCENTUAIS_ACIMA_DE_100"`; com preço, `motivo: null`), `composicao` com `{ valor, fracao }` para `ingredientes`, `gastosMensais`, `gastosPorUnidade`, `embalagem`, `perdas`, `imposto`, `taxaCanal`, `gastosPercentuais` e `lucro` (ou `null` sem preço). Ver [Preço por canal](business-rules.md#preço-por-canal) |
 | `ReceitaCusto` | `quantidade_lotes`, `total_unidades`, `custo_invisivel`, `custo_total_producao`, `custo_por_unidade`. **Muda (BE-28):** `custo_por_unidade` é o custo novo (com embalagem e perda) e `custo_total_producao = custo_por_unidade × total_unidades`; `custo_invisivel` continua só com os gastos `MENSAL` e `POR_UNIDADE` |
-| `SimulacaoCenario` | `custoUnitario`, `precoVenda`, `volume`, `lucroEstimado`, `margemProjetada` (fração), `breakEven` (**legado**). **Muda (BE-31):** `lucroEstimado` é o `lucroMes` e `margemProjetada` é o `lucroReal` (os dois agora descontam imposto, taxa do canal e gastos `PERCENTUAL_VENDA`); `breakEven` (`ceil(custo × volume ÷ preço)`) continua só porque o schema atual do frontend o exige e sai com a BE-33, no lugar do `pontoEquilibrio`. **Novos (BE-31):** `canalId`, `canal` (nome), `custoSemGastosMensais` (4 casas), `percentuaisSemLucro` (fração, 4 casas), `margemContribuicao` (MCu, 4 casas), `lucroPorUnidade` (4 casas), `lucroReal` (fração do preço, 4 casas, pode ser negativo), `lucroMes` (2 casas), `gastosMensais` (2 casas) e `pontoEquilibrio: { unidades, motivo }` (unidades inteiras por mês; `unidades: null` com `motivo: "MARGEM_NEGATIVA"`; com unidades, `motivo: null`) |
+| `SimulacaoCenario` | `custoUnitario`, `precoVenda`, `volume`, `lucroEstimado`, `margemProjetada` (fração), `breakEven` (**legado**). **Muda (BE-31):** `lucroEstimado` é o `lucroMes` e `margemProjetada` é o `lucroReal` (os dois agora descontam imposto, taxa do canal e gastos `PERCENTUAL_VENDA`); `breakEven` (`ceil(custo × volume ÷ preço)`) continua só porque o schema atual do frontend o exige e sai quando o frontend passar a usar o `pontoEquilibrio`. **Novos (BE-31):** `canalId`, `canal` (nome), `custoSemGastosMensais` (4 casas), `percentuaisSemLucro` (fração, 4 casas), `margemContribuicao` (MCu, 4 casas), `lucroPorUnidade` (4 casas), `lucroReal` (fração do preço, 4 casas, pode ser negativo), `lucroMes` (2 casas), `gastosMensais` (2 casas) e `pontoEquilibrio: { unidades, motivo }` (unidades inteiras por mês; `unidades: null` com `motivo: "MARGEM_NEGATIVA"`; com unidades, `motivo: null`) |
 | `PrecoVenda` | `custo_total_unitario`, `preco_sugerido`, `lucro_por_unidade` |
 | `Estoque` | `id`, `insumoId`, `quantidadeDisponivel` (pode ser negativa), `quantidadeMinima`, `dataAlteracao` (`null` sem alteração; no monolito vem preenchida desde a criação, pelo `@updatedAt`). O `id` nunca é 0: todo insumo nasce com o registro de estoque (BE-07). **Novo (BE-32):** `estoqueNegativo` (`quantidadeDisponivel < 0`) |
 | `MovimentacaoEstoque` | `id`, `insumoId`, `tipo` (`ENTRADA \| SAIDA`), `origem` (`COMPRA \| PRODUCAO`), `quantidade`, `referenciaId` (`null`; id da produção na saída por produção e, **novo (BE-29)**, id da compra na entrada por compra), `observacao` (`null`, **novo**), `dataMovimentacao` |

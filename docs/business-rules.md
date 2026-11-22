@@ -120,7 +120,7 @@ custoMedio  = saldo ≤ 0 ? custoCompra
 | `taxaMaquininha` | taxa cobrada no balcão, fração do preço | 0 |
 
 - Os padrões servem para quem está começando e ainda não fatura. Ficam em `CONFIGURACAO_CUSTOS_PADRAO` (`configuracao-custos/domain/configuracao-custos.calculos.ts`) e são também os defaults das colunas.
-- A configuração nasce no cadastro da empresa (`ConfiguracaoCustosService.criarPadrao(empresaId, tx)`, chamado pelo `auth` na transação do cadastro), no seed (que a volta aos padrões) e, para as empresas que já existiam, na própria migration `criar_configuracao_custos`.
+- A configuração nasce no cadastro da empresa (`ConfiguracaoCustosService.criarPadrao(empresaId, tx)`, chamado pelo `auth` na transação do cadastro), no seed (que grava a da padaria de demonstração: 100 fornadas e maquininha de 1,36%, BE-33) e, para as empresas que já existiam, na própria migration `criar_configuracao_custos`.
 - Validação (`validarConfiguracaoCustos`), feita depois de mesclar o `PUT` com os valores salvos: `capacidadeMensal > 0`; `lucroPadrao`, `impostoPercentual` e `taxaMaquininha` entre 0 e 1, inclusive. Erro → 400 `DADOS_INVALIDOS`, um `details` por campo, no formato do `ValidationPipe`.
 - Os valores são gravados e devolvidos como vieram, sem arredondar.
 - Sem pró-labore, regime tributário, anexo do Simples nem faturamento: decisão de simplicidade da BE-24. `capacidadeMensal` divide os gastos `MENSAL`; `lucroPadrao`, `impostoPercentual` e `taxaMaquininha` entram no [preço por canal](#preço-por-canal) (BE-28).
@@ -137,7 +137,7 @@ custoMedio  = saldo ≤ 0 ? custoCompra
 | iFood com entrega | 0,262 | não | 23% do plano com entrega + 3,2% |
 
 - A comissão é fração do **preço de venda**, entre 0 e 1, gravada e devolvida sem arredondar.
-- Os padrões ficam em `CANAIS_PADRAO` (`canais/domain/canais.calculos.ts`). Nascem no cadastro da empresa (`CanalVendaService.criarPadrao(empresaId, tx)`, chamado pelo `auth` na transação do cadastro), no seed (que os recria) e, para as empresas que já existiam, na migration `criar_canal_venda`. Todos são editáveis.
+- Os padrões ficam em `CANAIS_PADRAO` (`canais/domain/canais.calculos.ts`). Nascem no cadastro da empresa (`CanalVendaService.criarPadrao(empresaId, tx)`, chamado pelo `auth` na transação do cadastro), no seed (que os recria com o iFood ativo, BE-33) e, para as empresas que já existiam, na migration `criar_canal_venda`. Todos são editáveis.
 - O Balcão é marcado pela coluna `balcao` (o nome pode mudar), que a API não deixa alterar e que canal criado pelo `POST` nunca tem. Excluir o Balcão → 422 `CANAL_BALCAO_NAO_EXCLUIVEL` "O canal Balcão não pode ser excluído" (`garantirCanalExcluivel`). Desativá-lo é permitido: a issue só proíbe a exclusão.
 - Os outros canais podem ser excluídos. As vendas deles ficam com `canalId: null` (FK `SET NULL`, BE-30); o lucro real já gravado não muda.
 - Taxa do canal no preço (BE-28, `taxaDoCanal`): no Balcão, a `taxaMaquininha` da configuração (a `comissaoPercentual` dele é ignorada); nos outros, a `comissaoPercentual`. Só os canais **ativos** entram em `precos` da receita; para outros módulos, `CanalVendaService` exporta `listarAtivosDaEmpresa(empresaId, tx?)` e, desde a BE-30, `buscarParaVenda(canalId?, empresaId)`: o canal informado, ativo ou não (404 `CANAL_VENDA_NAO_ENCONTRADO` se for de outra empresa), ou o Balcão quando omitido.
@@ -166,12 +166,39 @@ Cadastro:
   - a entrada aceita `metodo_rateio` no lugar de `tipo`: `FIXO` e `PROPORCIONAL` viram `MENSAL` (eram os valores do mês) e `POR_UNIDADE` continua `POR_UNIDADE`. Se vierem os dois, vale o `tipo`;
   - a resposta traz o `tipo` (campo novo) e um `metodoRateio` derivado: `POR_UNIDADE` para `POR_UNIDADE` e `FIXO` para os outros (o `PERCENTUAL_VENDA` não tem equivalente; `FIXO` é o de menor efeito no cálculo local do frontend);
   - no `PUT`, um `metodo_rateio` igual ao `metodoRateio` mostrado para o tipo salvo mantém o tipo, porque o formulário atual reenvia o método que recebeu; sem isso, editar a descrição de um `PERCENTUAL_VENDA` o transformaria em `MENSAL`.
-  - Um gasto criado como `PROPORCIONAL` volta como `FIXO`: o frontend aceita, e os dois viraram o mesmo tipo. O legado sai quando o frontend passar a usar o `tipo` (BE-33).
+  - Um gasto criado como `PROPORCIONAL` volta como `FIXO`: o frontend aceita, e os dois viraram o mesmo tipo. O legado continua enquanto o frontend atual o exigir ([api.md](api.md#campos-legados-mantidos)).
 - `valor` é gravado como veio, sem `round2`, como no catalog-service.
 - Listagem por `id` decrescente (o mais novo primeiro), como hoje. `PUT` com campos opcionais: campo omitido mantém o valor salvo.
 - Gasto de outra empresa ou inexistente → 404 `GASTO_INDIRETO_NAO_ENCONTRADO`.
 - Excluir um gasto não apaga os rateios das produções antigas: `rateio_producao.gasto_indireto_id` não tem FK e guarda o id, como nos microsserviços, e o rateio guarda a `descricao`. **Muda (BE-12):** a BE-05 previa `SET NULL`, mas o `gastoIndiretoId` nulo quebraria o schema do frontend (`z.number().int()`, que mostra "Gasto #id").
 - Para outros módulos, `GastoIndiretoService` exporta `listarPorEmpresa(empresaId, tx?)` e `buscarVariosDaEmpresa(ids, empresaId, tx?)`. Este último ignora ids repetidos, devolve `[]` para lista vazia e responde 404 se algum id não existir ou for de outra empresa (base da correção da lacuna 11, aplicada na produção pela BE-12).
+
+## Cálculo de custo e preço (épico E7)
+
+**Muda (BE-23 a BE-33).** Resumo do cálculo novo, que substitui o `custo × (1 + margem)` dos microsserviços. Cada passo tem a seção própria abaixo, com as fórmulas completas.
+
+| Passo | Regra | Seção |
+| --- | --- | --- |
+| Custo do insumo | três custos: **médio** (o que já foi pago: produção e venda), **último** (última compra) e **reposição** (`precoMercado ?? ultimoCusto`: forma o preço) | [Insumos](#insumos), [Compras](#compras-de-insumo) |
+| Gastos | pelo tipo: `MENSAL` ÷ capacidade mensal × uso de forno do lote; `POR_UNIDADE` por unidade; `PERCENTUAL_VENDA` no preço | [Gastos](#gastos-indiretos-e-rateio), [Configuração](#configuração-de-custos) |
+| Custo da unidade | `((ingredientes + gastos mensais do lote) ÷ rendimento + embalagem + gastos por unidade) ÷ (1 − perda)`, sem arredondar no meio | [Receitas: custo](#receitas-custo) |
+| Preço | por canal: `custo ÷ (1 − imposto − taxa do canal − gastos percentuais − lucro)`, com o lucro sobre o **preço** | [Preço por canal](#preço-por-canal) |
+| Produção | ingredientes ao custo médio + gastos `MENSAL` do forno, uma vez | [Produções](#produções) |
+| Venda | canal da venda e `lucroReal = 1 − percentuais sem lucro − custo ÷ preço` | [Vendas](#vendas) |
+| Ponto de equilíbrio | do produto (unidades por mês) e da empresa (faturamento por mês), pela margem de contribuição | [Simulação e ponto de equilíbrio](#simulação-e-ponto-de-equilíbrio) |
+| Alertas | estoque negativo e reposição mais de 10% acima do médio | [Alertas](#alertas) |
+
+Exemplo com o seed (BE-33): Padaria Pão Feliz com gastos mensais de R$ 2.515 (aluguel, luz, gás e DAS), 100 fornadas por mês, saquinho de R$ 0,05 por unidade, lucro de 15% e maquininha de 1,36%. O Pão Francês leva 1 kg de farinha (reposição R$ 3,50/kg, médio R$ 3,37), 0,02 kg de sal e 15 g de fermento, rende 28 pães, ocupa 0,2 fornada e perde 5%:
+
+```
+ingredientes do lote = 3,50 + 0,05 + 0,255                 = R$ 3,805
+gastos mensais       = 2.515 × 0,2 ÷ 100                   = R$ 5,03
+custo da unidade     = ((3,805 + 5,03) ÷ 28 + 0,05) ÷ 0,95 = R$ 0,3848
+preço no Balcão      = 0,3848 ÷ (1 − 0,15 − 0,0136)        = R$ 0,4600
+preço no iFood       = 0,3848 ÷ (1 − 0,15 − 0,152)         = R$ 0,5513
+```
+
+Com o custo médio da farinha, a venda a R$ 0,46 no Balcão registra custo de R$ 0,3799 e lucro real de 16,05%. A simulação no Balcão dá margem de contribuição de R$ 0,2581 e ponto de equilíbrio de 9.745 pães por mês (todos os gastos mensais pagos só com pão).
 
 ## Receitas: custo
 
@@ -232,7 +259,7 @@ Detalhamento na resposta da receita (`custo`): `ingredientesLote` e `gastosMensa
 - `usoPorLote` entra nos gastos `MENSAL` da receita e da produção; `embalagemPorUnidade` e `perdaPercentual` entram no custo unitário desde a BE-28.
 - Perda ou lucro ≥ 1 não deixam preço possível (divisão por zero) → 400 `DADOS_INVALIDOS`, com `details` no campo do corpo (`perda_percentual`, `lucro_percentual`). O DTO confere o tipo e o mínimo; o limite superior, e o `PUT` mesclado com o salvo, são conferidos por `validarFichaTecnica`.
 - Na resposta, `lucroPercentual` é omitido quando a receita usa o lucro padrão (como os outros campos sem valor da receita) e sai com 4 casas.
-- **Compatibilidade com o frontend atual:** o formulário ainda envia `margem_lucro` (markup). Ela é aceita e convertida em `lucro_percentual = margem ÷ (1 + margem)`, o que dá o mesmo preço sugerido (`custo × (1 + margem) = custo ÷ (1 − lucro)`); se vierem os dois, vale o `lucro_percentual`. `margem_lucro: null` volta ao lucro padrão. O legado sai quando o frontend passar a usar o lucro (BE-33).
+- **Compatibilidade com o frontend atual:** o formulário ainda envia `margem_lucro` (markup). Ela é aceita e convertida em `lucro_percentual = margem ÷ (1 + margem)`, o que dá o mesmo preço sugerido (`custo × (1 + margem) = custo ÷ (1 − lucro)`); se vierem os dois, vale o `lucro_percentual`. `margem_lucro: null` volta ao lucro padrão. O legado continua enquanto o frontend atual o exigir ([api.md](api.md#campos-legados-mantidos)).
 - Funções puras: `FICHA_TECNICA_PADRAO`, `resolverFichaTecnica(informada, salva?)` (omitido ou `null` mantém o salvo, menos `lucroPercentual`, em que `null` volta ao padrão), `validarFichaTecnica`, `lucroDaMargem`, `margemDoLucro` e `lucroPercentualInformado`.
 
 ### Edição
@@ -289,7 +316,7 @@ pontoEquilibrio       = MCu ≤ 0 ? { unidades: null, motivo: MARGEM_NEGATIVA }
 - **Ponto de equilíbrio do produto**: unidades por mês para pagar **todos** os gastos mensais "se só vendesse este produto", arredondado para cima (o `round6` tira o ruído do ponto flutuante antes do teto). `MCu ≤ 0` (comparado com `round6`) → `unidades: null` com motivo `MARGEM_NEGATIVA`: nenhuma quantidade paga os gastos. Sem gastos mensais, 0.
 - O lucro real está na mesma base do lucro do preço: **pelo preço sugerido do canal, o `lucroReal` é o lucro configurado** (critério da BE-31). Exemplo: o pão francês da BE-28 no Balcão, a R$ 0,6961 (maquininha de 1,36%), tem lucro real de 15%, custo variável de `3,305 ÷ 50 ÷ 0,95` = R$ 0,0696, MCu de `0,6961 × 0,9864 − 0,0696` ≈ R$ 0,617 e ponto de equilíbrio de `2.435 ÷ 0,617` = **3.947 pães por mês**.
 - `novoCusto` troca o custo unitário; o custo variável perde a mesma parte dos gastos mensais que a receita tem (nunca fica abaixo de 0).
-- Resposta (`toSimulacaoCenarioDto`): custos, preço, MCu e lucro por unidade com 4 casas; `percentuaisSemLucro` e `lucroReal` (frações) com 4; `lucroMes` e `gastosMensais` com 2; `canalId` e `canal` (nome). Os campos antigos continuam pelo schema atual do frontend: `lucroEstimado` = `lucroMes` e `margemProjetada` = `lucroReal` (**mudam**: agora descontam imposto, taxa e gastos percentuais), e `breakEven` = `ceil(round6(custoUnitario × volume ÷ preco))`, **legado**, que sai com a BE-33 (o frontend passa a usar o `pontoEquilibrio`).
+- Resposta (`toSimulacaoCenarioDto`): custos, preço, MCu e lucro por unidade com 4 casas; `percentuaisSemLucro` e `lucroReal` (frações) com 4; `lucroMes` e `gastosMensais` com 2; `canalId` e `canal` (nome). Os campos antigos continuam pelo schema atual do frontend: `lucroEstimado` = `lucroMes` e `margemProjetada` = `lucroReal` (**mudam**: agora descontam imposto, taxa e gastos percentuais), e `breakEven` = `ceil(round6(custoUnitario × volume ÷ preco))`, **legado**, que sai quando o frontend usar o `pontoEquilibrio` ([api.md](api.md#campos-legados-mantidos)).
 - Mensagens (400): "Receita sem preço sugerido definido. Informe novoPreco para simular." (`RECEITA_SEM_PRECO`, quando os percentuais do canal passam de 100% e não há `novoPreco`) e, **muda (BE-10, lacuna 27)**, preço igual a 0 (receita sem custo nenhum) → `PRECO_INVALIDO` "Preço de venda deve ser maior que zero. Informe novoPreco para simular.", em vez de `NaN`. O `RECEITA_SEM_CUSTO` saiu da simulação: desde a BE-27 o custo é sempre calculado.
 - `novoCusto` e `novoPreco` > 0, `volume` e `canalId` inteiros > 0, quando informados. Canal de outra empresa → 404 `CANAL_VENDA_NAO_ENCONTRADO`.
 - Funções puras em `receitas.calculos.ts`: `simularCenario(entrada, receita)`, `calcularMargemContribuicao`, `calcularPontoEquilibrioProduto` e `somarGastosMensais`, sem arredondar (menos as unidades); não grava nada. Responde 201.
@@ -424,7 +451,7 @@ status inicial      = PENDENTE
 - O lucro real está na **mesma base do lucro do preço** (fração do preço): vendido pelo preço sugerido do canal, ele é o lucro configurado. Exemplo (critério da BE-30): o pão francês de R$ 0,5822 vendido no Balcão pelo preço sugerido (R$ 0,6961, maquininha de 1,36%) tem lucro real de **15%**; no iFood (15,2%) pelo mesmo preço, `1 − 0,152 − 0,8364` = **1,16%**. Com o preço digitado em centavos (R$ 0,70), o Balcão dá 15,47%.
 - O custo usa o **custo médio** dos insumos (o que já foi pago), e o preço sugerido usa a reposição: depois de uma alta de preço, vender pelo preço novo mostra o lucro real maior enquanto o estoque antigo dura.
 - `canal_id` é opcional (Balcão se omitido); qualquer canal da empresa vale, ativo ou não. Canal de outra empresa → 404 `CANAL_VENDA_NAO_ENCONTRADO`. A venda grava o `canalId` (`SET NULL` se o canal for excluído) e cada item grava o `lucroReal`, sem arredondar; os dois são `null` nas vendas anteriores à BE-30.
-- `margemRealizada` continua no contrato (o frontend atual a valida) e sai quando o frontend usar o lucro real (BE-33).
+- `margemRealizada` continua no contrato (o frontend atual a valida) e sai quando o frontend usar o lucro real ([api.md](api.md#campos-legados-mantidos)).
 
 **Muda (BE-23):** a venda grava os valores exatos (inclusive o `custoUnitario` exato da receita); a resposta mostra `total` com 2 casas e `custoUnitario`, `margemRealizada` e `lucroReal` com 4.
 
@@ -476,7 +503,7 @@ A lista numerada está em [`lucroai-frontend/docs/api-integration.md#lacunas-do-
 | 15 | `ReceitaCusto` em `snake_case` | mantida | BE-10 | é o contrato do frontend |
 | 16 | links HATEOAS incorretos | corrigida | BE-04 | sem envelope: a resposta é o JSON do recurso |
 | 17 | seeds com `EMPRESA_ID = 1` fixo | corrigida | BE-14 | um seed só, pelos ids reais |
-| 18 | custo invisível soma todos os gastos da empresa | corrigida em parte | BE-09, BE-26, BE-27 | continua somando todos os gastos (é a regra do cálculo novo), mas pelo tipo: o gasto mensal é dividido pela capacidade mensal (vezes o uso de forno da receita, BE-27) e não entra mais inteiro em cada lote (BE-26); a duplicidade na produção saiu na BE-30 (a produção soma só os ingredientes e os gastos mensais do forno, uma vez). O seed grava com a mesma regra, então seed e API batem |
+| 18 | custo invisível soma todos os gastos da empresa | corrigida | BE-09, BE-26, BE-27, BE-30 | continua somando todos os gastos (é a regra do cálculo novo), mas pelo tipo: o gasto mensal é dividido pela capacidade mensal (vezes o uso de forno da receita, BE-27) e não entra mais inteiro em cada lote (BE-26); a duplicidade na produção saiu na BE-30 (a produção soma só os ingredientes e os gastos mensais do forno, uma vez). O seed grava com a mesma regra, então seed e API batem |
 | 19 | `GET /estoque/insumos/:id` de insumo inexistente → 404 | mantida | BE-11 | é o comportamento certo (inexistente ou de outra empresa) |
 | 20 | preço de venda sem arredondamento | corrigida | BE-10, BE-23 | 4 casas na resposta (`round4`); a BE-10 usava `round2` |
 | 21 | `PUT /receitas/:id` não remove a margem | corrigida | BE-09, BE-27 | a BE-09 fazia `margem_lucro: null` limpar margem e preço sugerido; desde a BE-27 a margem não é gravada, e `null` volta ao lucro padrão da empresa |
