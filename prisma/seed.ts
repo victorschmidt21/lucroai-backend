@@ -418,7 +418,8 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
         quantidadeBaseCusto: def.quantidadeBaseCusto,
         unidade: def.unidade,
         valorPago: def.valorPago,
-        custoUnitario,
+        custoMedio: custoUnitario,
+        ultimoCusto: custoUnitario,
         dataCriacao: diasAtras(180),
       },
     });

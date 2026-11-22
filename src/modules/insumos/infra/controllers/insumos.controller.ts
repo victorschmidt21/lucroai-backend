@@ -48,7 +48,7 @@ export class InsumosController {
     return this.service.create(dto, usuario.empresa.id);
   }
 
-  /** Atualiza um insumo (campos opcionais) e recalcula o custo unitário */
+  /** Atualiza um insumo (campos opcionais); mudar o preço informa o preço de mercado */
   @Patch(':id')
   update(
     @Param('id', ParseIntPipe) id: number,

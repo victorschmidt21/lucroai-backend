@@ -19,7 +19,7 @@ export class ItemReceitaDto {
   insumoId: number;
   /** @example 0.25 */
   quantidade: number;
-  /** `quantidade × custoUnitario atual do insumo`, com 2 casas. @example 0.75 */
+  /** `quantidade × custo de reposição do insumo` (BE-29), com 2 casas. @example 0.75 */
   custoCalculado?: number;
 }
 

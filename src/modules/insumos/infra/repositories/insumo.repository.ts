@@ -13,7 +13,10 @@ interface InsumoData {
   quantidadeBaseCusto: number;
   unidade: UnidadeMedida;
   valorPago: number;
-  custoUnitario: number;
+  custoMedio: number;
+  ultimoCusto: number;
+  precoMercado: number | null;
+  precoMercadoData: Date | null;
 }
 
 @Injectable()
@@ -27,8 +30,13 @@ export class InsumoRepository {
     });
   }
 
-  findByIdAndEmpresa(id: number, empresaId: number): Promise<Insumo | null> {
-    return this.prisma.insumo.findFirst({ where: { id, empresaId } });
+  findByIdAndEmpresa(
+    id: number,
+    empresaId: number,
+    tx?: PrismaTransaction,
+  ): Promise<Insumo | null> {
+    const db = tx ?? this.prisma;
+    return db.insumo.findFirst({ where: { id, empresaId } });
   }
 
   listByIdsAndEmpresa(
@@ -51,8 +59,13 @@ export class InsumoRepository {
     return db.insumo.create({ data: { ...data, empresaId } });
   }
 
-  update(id: number, data: Partial<InsumoData>): Promise<Insumo> {
-    return this.prisma.insumo.update({ where: { id }, data });
+  update(
+    id: number,
+    data: Partial<InsumoData>,
+    tx?: PrismaTransaction,
+  ): Promise<Insumo> {
+    const db = tx ?? this.prisma;
+    return db.insumo.update({ where: { id }, data });
   }
 
   /**

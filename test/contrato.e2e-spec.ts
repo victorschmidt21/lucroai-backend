@@ -50,6 +50,17 @@ const estoqueProdutoSchema = z.object({
   dataAlteracao: z.iso.datetime().nullable(),
 });
 
+/** `CompraInsumo` é novo (BE-29) e não tem schema no frontend. */
+const compraInsumoSchema = z.object({
+  id: z.number().int(),
+  insumoId: z.number().int(),
+  quantidade: z.number(),
+  valorTotal: z.number(),
+  custoUnitario: z.number(),
+  observacao: z.string().nullable(),
+  dataCompra: z.iso.datetime(),
+});
+
 const healthSchema = z.object({
   status: z.literal('ok'),
   database: z.string(),
@@ -216,6 +227,27 @@ describe('Contrato com o frontend (e2e)', () => {
         .send({ valorPago: 8 })
         .expect(200);
       expect(validar(insumoSchema, editado.body).valorPago).toBe(8);
+
+      // Compras (BE-29): rota nova, validada contra o schema local.
+      const compra = await comA('post', `/insumos/${acucarId}/compras`)
+        .send({ quantidade: 2, valorTotal: 20, observacao: 'Nota 1' })
+        .expect(201);
+      expect(validar(compraInsumoSchema, compra.body)).toMatchObject({
+        insumoId: acucarId,
+        quantidade: 2,
+        valorTotal: 20,
+        custoUnitario: 10,
+      });
+      const compras = await comA('get', `/insumos/${acucarId}/compras`).expect(
+        200,
+      );
+      const historico = validar(z.array(compraInsumoSchema), compras.body);
+      expect(historico.map((c) => c.id)).toContain(compra.body.id);
+      const comprado = await comA('get', `/insumos/${acucarId}`).expect(200);
+      expect(validar(insumoSchema, comprado.body)).toMatchObject({
+        quantidadeDisponivel: 2,
+        custoUnitario: 10,
+      });
 
       await comA('delete', `/insumos/${lixoId}`).expect(204);
       const sumiu = await comA('get', `/insumos/${lixoId}`).expect(404);
@@ -582,6 +614,12 @@ describe('Contrato com o frontend (e2e)', () => {
         ['get', `/insumos/${farinhaId}`],
         ['patch', `/insumos/${farinhaId}`, { valorPago: 1 }],
         ['delete', `/insumos/${farinhaId}`],
+        ['get', `/insumos/${farinhaId}/compras`],
+        [
+          'post',
+          `/insumos/${farinhaId}/compras`,
+          { quantidade: 1, valorTotal: 1 },
+        ],
         ['get', `/gastos-indiretos/${gastoId}`],
         ['put', `/gastos-indiretos/${gastoId}`, { valor: 99 }],
         ['delete', `/gastos-indiretos/${gastoId}`],

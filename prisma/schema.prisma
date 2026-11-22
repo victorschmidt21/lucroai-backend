@@ -80,6 +80,7 @@ model Empresa {
   vendas                      Venda[]
   configuracaoCustos          ConfiguracaoCustos?
   canaisVenda                 CanalVenda[]
+  comprasInsumo               CompraInsumo[]
 
   @@map("empresa")
 }
@@ -106,18 +107,50 @@ model Insumo {
   nome                String        @db.VarChar(80)
   quantidadeBaseCusto Float         @map("quantidade_base_custo")
   unidade             UnidadeMedida
+  /// Último preço de referência (`valorPago` por `quantidadeBaseCusto`): o do
+  /// cadastro, o da última compra ou o informado no PATCH
   valorPago           Float         @map("valor_pago")
-  /// valorPago / quantidadeBaseCusto, arredondado
-  custoUnitario       Float         @map("custo_unitario")
+  /// Custo médio móvel por unidade (BE-29): estoque, produção e venda
+  custoMedio          Float         @map("custo_medio")
+  /// Custo por unidade da última compra (BE-29)
+  ultimoCusto         Float         @map("ultimo_custo")
+  /// Preço de mercado por unidade, informado sem compra (BE-29); a próxima
+  /// compra o limpa. Reposição = precoMercado ?? ultimoCusto
+  precoMercado        Float?        @map("preco_mercado")
+  precoMercadoData    DateTime?     @map("preco_mercado_data")
   dataCriacao         DateTime      @default(now()) @map("data_criacao")
 
   empresa       Empresa               @relation(fields: [empresaId], references: [id])
   estoque       Estoque?
   movimentacoes MovimentacaoEstoque[]
   itensReceita  ItemReceita[]
+  compras       CompraInsumo[]
 
   @@index([empresaId])
   @@map("insumo")
+}
+
+/// Compra de insumo (BE-29), imutável. Dá entrada no estoque (ENTRADA/COMPRA,
+/// `referenciaId` = id da compra) e recalcula o custo médio do insumo.
+model CompraInsumo {
+  id            Int      @id @default(autoincrement())
+  empresaId     Int      @map("empresa_id")
+  insumoId      Int      @map("insumo_id")
+  /// Na unidade do insumo; 0 só na compra inicial de um cadastro sem saldo
+  quantidade    Float
+  valorTotal    Float    @map("valor_total")
+  /// Custo por unidade da compra: valorTotal / quantidade (na compra inicial,
+  /// valorPago / quantidadeBaseCusto do cadastro)
+  custoUnitario Float    @map("custo_unitario")
+  observacao    String?  @db.VarChar(200)
+  dataCompra    DateTime @default(now()) @map("data_compra")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+  insumo  Insumo  @relation(fields: [insumoId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId])
+  @@index([insumoId, dataCompra])
+  @@map("compra_insumo")
 }
 
 // ---------- gastos-indiretos ----------
@@ -241,7 +274,8 @@ model MovimentacaoEstoque {
   tipo             TipoMovimentacaoEstoque
   origem           OrigemMovimentacaoEstoque
   quantidade       Float
-  /// Id da produção (origem PRODUCAO); nulo na compra
+  /// Id da produção (origem PRODUCAO) ou da compra (origem COMPRA, BE-29);
+  /// nulo na entrada manual
   referenciaId     Int?                      @map("referencia_id")
   observacao       String?                   @db.VarChar(200)
   dataMovimentacao DateTime                  @default(now()) @map("data_movimentacao")

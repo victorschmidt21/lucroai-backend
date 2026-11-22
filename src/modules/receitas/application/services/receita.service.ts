@@ -5,6 +5,7 @@ import { CanalVendaService } from '../../../canais/application/services/canal-ve
 import { ConfiguracaoCustosService } from '../../../configuracao-custos/application/services/configuracao-custos.service.js';
 import { GastoIndiretoService } from '../../../gastos-indiretos/application/services/gasto-indireto.service.js';
 import { InsumoService } from '../../../insumos/application/services/insumo.service.js';
+import { calcularCustoReposicao } from '../../../insumos/domain/insumos.calculos.js';
 import {
   type BasePreco,
   calcularCustoReceita,
@@ -158,7 +159,7 @@ export class ReceitaService {
   }
 
   /**
-   * Custo de `lotes` lotes, com os custos atuais dos insumos e os gastos
+   * Custo de `lotes` lotes, com os custos de reposição dos insumos (BE-29) e os gastos
    * atuais da empresa. Não grava nada.
    */
   async calcularCusto(
@@ -347,7 +348,10 @@ export class ReceitaService {
       tx,
     );
     return {
-      custoPorInsumo: new Map(insumos.map((i) => [i.id, i.custoUnitario])),
+      // O preço se forma com o custo de reposição (BE-29), não com o médio.
+      custoPorInsumo: new Map(
+        insumos.map((i) => [i.id, calcularCustoReposicao(i)]),
+      ),
       gastos,
       configuracao,
       canais,
