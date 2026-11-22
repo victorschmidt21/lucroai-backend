@@ -1,11 +1,12 @@
-// Cópia de lucroai-frontend/src/shared/api/contracts/catalog.ts (commit cb35609),
-// copiada em 2026-11-20. Não edite: atualize pelo procedimento de docs/api.md.
+// Cópia de lucroai-frontend/src/shared/api/contracts/catalog.ts (commit b4ebbd9),
+// copiada em 2026-11-22. Não edite: atualize pelo procedimento de docs/api.md.
 // Única mudança: imports relativos com `.js` (ESM nodenext).
 
 import { z } from 'zod';
 import { metodoRateioSchema, unidadeMedidaSchema } from './enums.js';
 
-// catalog-service. Origem: `services/catalog-service/src/modules/`.
+// Insumos e gastos indiretos. Origem: `lucroai-backend` (monolito),
+// `src/modules/insumos/` e `src/modules/gastos-indiretos/`.
 
 /** `insumos/application/dto/insumo.dto.ts` */
 export const insumoSchema = z.object({
@@ -13,8 +14,10 @@ export const insumoSchema = z.object({
   empresaId: z.number().int(),
   nome: z.string(),
   quantidadeBaseCusto: z.number(),
-  /** Espelho do estoque, atualizado por evento (pode ficar negativo). */
+  /** Saldo do estoque (pode ficar negativo). */
   quantidadeDisponivel: z.number(),
+  /** Estoque mínimo (lacuna 5, resolvida). */
+  quantidadeMinima: z.number(),
   unidade: unidadeMedidaSchema,
   valorPago: z.number(),
   /** `valorPago / quantidadeBaseCusto`, sem arredondamento. */

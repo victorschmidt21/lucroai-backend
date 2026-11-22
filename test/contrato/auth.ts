@@ -1,10 +1,10 @@
-// Cópia de lucroai-frontend/src/shared/api/contracts/auth.ts (commit cb35609),
-// copiada em 2026-11-20. Não edite: atualize pelo procedimento de docs/api.md.
+// Cópia de lucroai-frontend/src/shared/api/contracts/auth.ts (commit b4ebbd9),
+// copiada em 2026-11-22. Não edite: atualize pelo procedimento de docs/api.md.
 // Única mudança: imports relativos com `.js` (ESM nodenext).
 
 import { z } from 'zod';
 
-// auth-service. Origem: `services/auth-service/src/modules/auth/`.
+// Login. Origem: `lucroai-backend` (monolito), `src/modules/auth/`.
 
 /** `login.dto.ts` */
 export type LoginBody = {

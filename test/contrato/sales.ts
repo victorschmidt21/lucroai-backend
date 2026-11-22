@@ -1,11 +1,11 @@
-// Cópia de lucroai-frontend/src/shared/api/contracts/sales.ts (commit cb35609),
-// copiada em 2026-11-20. Não edite: atualize pelo procedimento de docs/api.md.
+// Cópia de lucroai-frontend/src/shared/api/contracts/sales.ts (commit b4ebbd9),
+// copiada em 2026-11-22. Não edite: atualize pelo procedimento de docs/api.md.
 // Única mudança: imports relativos com `.js` (ESM nodenext).
 
 import { z } from 'zod';
 import { statusVendaSchema } from './enums.js';
 
-// sales-service. Origem: `services/sales-service/src/modules/vendas/`.
+// Vendas. Origem: `lucroai-backend` (monolito), `src/modules/vendas/`.
 
 /** `domain/models/venda.entity.ts` (`ItemVendaProps`) */
 export const itemVendaSchema = z.object({
