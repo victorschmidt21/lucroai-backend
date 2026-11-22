@@ -4,21 +4,38 @@ import type { PrismaTransaction } from '../../../../shared/infra/database/prisma
 import { TransactionManager } from '../../../../shared/infra/database/transaction.manager.js';
 import { CanalVendaService } from '../../../canais/application/services/canal-venda.service.js';
 import { EstoqueProdutoAcabadoService } from '../../../estoque/application/services/estoque-produto-acabado.service.js';
+import { GastoIndiretoService } from '../../../gastos-indiretos/application/services/gasto-indireto.service.js';
 import {
   type ReceitaComCusto,
   ReceitaService,
 } from '../../../receitas/application/services/receita.service.js';
-import { calcularPercentuaisSemLucro } from '../../../receitas/domain/receitas.calculos.js';
+import {
+  calcularPercentuaisSemLucro,
+  somarGastosMensais,
+} from '../../../receitas/domain/receitas.calculos.js';
 import { Venda, vendaFinalizada } from '../../domain/venda.entity.js';
+import {
+  calcularPontoEquilibrioEmpresa,
+  DIAS_PONTO_EQUILIBRIO,
+  type ItemParaMargem,
+  percentuaisSemLucroDaVenda,
+} from '../../domain/vendas.calculos.js';
 import { VendaRepository } from '../../infra/repositories/venda.repository.js';
 import type { CreateVendaDto } from '../dto/create-venda.dto.js';
 import type { ListVendasQueryDto } from '../dto/list-vendas-query.dto.js';
+import {
+  type ResumoVendasDto,
+  toResumoVendasDto,
+} from '../dto/resumo-vendas.dto.js';
 import type { UpdateVendaStatusDto } from '../dto/update-venda-status.dto.js';
 import {
   type VendaComItens,
   type VendaDto,
   toVendaDto,
 } from '../dto/venda.dto.js';
+
+/** O Balcão, cuja taxa é a da maquininha. */
+const BALCAO = { balcao: true, comissaoPercentual: 0 };
 
 @Injectable()
 export class VendaService {
@@ -27,6 +44,7 @@ export class VendaService {
     private readonly receitaService: ReceitaService,
     private readonly canalVendaService: CanalVendaService,
     private readonly estoqueProdutoAcabadoService: EstoqueProdutoAcabadoService,
+    private readonly gastoIndiretoService: GastoIndiretoService,
     private readonly transactionManager: TransactionManager,
   ) {}
 
@@ -41,6 +59,51 @@ export class VendaService {
       dataFim: query.dataFim ? new Date(query.dataFim) : undefined,
     });
     return rows.map(toVendaDto);
+  }
+
+  /**
+   * Resumo do painel (BE-31): ponto de equilíbrio da empresa com o mix das
+   * vendas concluídas dos últimos 30 dias. O custo variável de cada receita
+   * é o atual (custo médio dos insumos); os percentuais (imposto e taxa do
+   * canal) são os gravados na venda, ou os do Balcão nas vendas anteriores à
+   * BE-30.
+   */
+  async resumo(
+    empresaId: number,
+    agora = new Date(),
+  ): Promise<ResumoVendasDto> {
+    const dataInicio = new Date(
+      agora.getTime() - DIAS_PONTO_EQUILIBRIO * 24 * 60 * 60 * 1000,
+    );
+    const vendas = await this.repository.listByEmpresa(empresaId, {
+      status: 'CONCLUIDA',
+      dataInicio,
+    });
+    const receitas = new Map<number, ReceitaComCusto>();
+    const itens: ItemParaMargem[] = [];
+    for (const item of vendas.flatMap((venda) => venda.itens)) {
+      let receita = receitas.get(item.receitaId);
+      if (!receita) {
+        receita = await this.receitaService.buscarDaEmpresa(
+          item.receitaId,
+          empresaId,
+        );
+        receitas.set(item.receitaId, receita);
+      }
+      itens.push({
+        quantidade: item.quantidade,
+        precoUnitarioReal: item.precoUnitarioReal,
+        custoSemGastosMensais: receita.custo.detalhe.custoSemGastosMensais,
+        percentuaisSemLucro:
+          percentuaisSemLucroDaVenda(item) ??
+          calcularPercentuaisSemLucro(BALCAO, receita.basePreco),
+      });
+    }
+    const gastos = await this.gastoIndiretoService.listarPorEmpresa(empresaId);
+    return toResumoVendasDto(
+      calcularPontoEquilibrioEmpresa(somarGastosMensais(gastos), itens),
+      { dias: DIAS_PONTO_EQUILIBRIO, dataInicio, vendas: vendas.length },
+    );
   }
 
   async findById(id: number, empresaId: number): Promise<VendaDto> {
