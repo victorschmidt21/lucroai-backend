@@ -61,6 +61,41 @@ const compraInsumoSchema = z.object({
   dataCompra: z.iso.datetime(),
 });
 
+/** Ponto de equilíbrio (BE-31), sem schema no frontend. */
+const motivoPontoSchema = z.enum(['SEM_VENDAS', 'MARGEM_NEGATIVA']).nullable();
+
+/** Campos novos da simulação (BE-31), aditivos ao schema do frontend. */
+const simulacaoNovaSchema = simulacaoCenarioSchema.extend({
+  canalId: z.number().int(),
+  canal: z.string(),
+  custoSemGastosMensais: z.number(),
+  percentuaisSemLucro: z.number(),
+  margemContribuicao: z.number(),
+  lucroPorUnidade: z.number(),
+  lucroReal: z.number(),
+  lucroMes: z.number(),
+  gastosMensais: z.number(),
+  pontoEquilibrio: z.object({
+    unidades: z.number().int().nullable(),
+    motivo: motivoPontoSchema,
+  }),
+});
+
+/** `GET /vendas/resumo` é novo (BE-31) e não tem schema no frontend. */
+const resumoVendasSchema = z.object({
+  dias: z.number().int(),
+  dataInicio: z.iso.datetime(),
+  vendas: z.number().int(),
+  receita: z.number(),
+  margemContribuicao: z.number(),
+  indiceMargemContribuicao: z.number().nullable(),
+  gastosMensais: z.number(),
+  pontoEquilibrio: z.object({
+    valor: z.number().nullable(),
+    motivo: motivoPontoSchema,
+  }),
+});
+
 const healthSchema = z.object({
   status: z.literal('ok'),
   database: z.string(),
@@ -404,6 +439,25 @@ describe('Contrato com o frontend (e2e)', () => {
       const cenario = validar(simulacaoCenarioSchema, res.body);
       expect(cenario.precoVenda).toBe(2);
       expect(cenario.volume).toBe(100);
+      expect(validar(simulacaoNovaSchema, res.body).canal).toBe('Balcão');
+    });
+
+    it('POST /receitas/:id/simular pelo preço sugerido dá o lucro configurado', async () => {
+      const receita = await comA('get', `/receitas/${receitaId}`).expect(200);
+      const config = await comA('get', '/configuracao-custos').expect(200);
+      const lucro =
+        validar(
+          z.object({ lucroPercentual: z.number().optional() }),
+          receita.body,
+        ).lucroPercentual ??
+        validar(z.object({ lucroPadrao: z.number() }), config.body).lucroPadrao;
+      const res = await comA('post', `/receitas/${receitaId}/simular`)
+        .send({})
+        .expect(201);
+      expect(validar(simulacaoNovaSchema, res.body).lucroReal).toBeCloseTo(
+        lucro,
+        3,
+      );
     });
 
     it('POST /receitas/:id/preco-venda', async () => {
@@ -590,6 +644,18 @@ describe('Contrato com o frontend (e2e)', () => {
       const invalida = await comA('get', '/vendas?status=XYZ').expect(400);
       expect(validar(erroSchema, invalida.body).code).toBe('DADOS_INVALIDOS');
     });
+
+    it('GET /vendas/resumo traz o ponto de equilíbrio da empresa', async () => {
+      const res = await comA('get', '/vendas/resumo').expect(200);
+      const resumo = validar(resumoVendasSchema, res.body);
+      expect(resumo.dias).toBe(30);
+      expect(resumo.vendas).toBe(1);
+
+      const semVendas = await comB('get', '/vendas/resumo').expect(200);
+      expect(
+        validar(resumoVendasSchema, semVendas.body).pontoEquilibrio,
+      ).toEqual({ valor: null, motivo: 'SEM_VENDAS' });
+    });
   });
 
   describe('isolamento por empresa', () => {
@@ -773,6 +839,7 @@ describe('Contrato com o frontend (e2e)', () => {
       ['get', '/producoes/1'],
       ['post', '/producoes'],
       ['get', '/vendas'],
+      ['get', '/vendas/resumo'],
       ['get', '/vendas/1'],
       ['post', '/vendas'],
       ['patch', '/vendas/1/status'],
