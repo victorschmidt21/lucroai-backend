@@ -40,8 +40,8 @@ Fórmulas e regras de cada rota estão em [business-rules.md](business-rules.md)
 | `insumos` | `DELETE /insumos/:id` | — | vazio | 204 | BE-07 |
 | `gastos-indiretos` | `GET /gastos-indiretos` | — | `GastoIndireto[]` (id decrescente) | 200 | BE-08 |
 | `gastos-indiretos` | `GET /gastos-indiretos/:id` | — | `GastoIndireto` | 200 | BE-08 |
-| `gastos-indiretos` | `POST /gastos-indiretos` | `{ descricao, valor, metodo_rateio }` | `GastoIndireto` | 201 | BE-08 |
-| `gastos-indiretos` | `PUT /gastos-indiretos/:id` | `{ descricao?, valor?, metodo_rateio? }` | `GastoIndireto` | 200 | BE-08 |
+| `gastos-indiretos` | `POST /gastos-indiretos` | `{ descricao, valor, tipo }` (ou o legado `metodo_rateio` no lugar de `tipo`) | `GastoIndireto` | 201 | BE-08, BE-26 |
+| `gastos-indiretos` | `PUT /gastos-indiretos/:id` | `{ descricao?, valor?, tipo?, metodo_rateio? }` | `GastoIndireto` | 200 | BE-08, BE-26 |
 | `gastos-indiretos` | `DELETE /gastos-indiretos/:id` | — | vazio | 204 | BE-08 |
 | `receitas` | `GET /receitas` | — | `Receita[]` (`dataCriacao` decrescente) | 200 | BE-09 |
 | `receitas` | `GET /receitas/:id` | — | `Receita` | 200 | BE-09 |
@@ -78,7 +78,9 @@ Observações:
 - `POST /auth/empresa`: o `CreateEmpresaDto` atual exige `cnpj` e `nome_usuario`; a BE-06 os torna opcionais, o que é compatível (o banco já aceita `null`, e o payload os devolve como `null`). Textos são aparados (vazio = sem valor), com os limites das colunas: `nome_empresa` até 100, `cnpj` até 18, `segmento`, `nome_usuario` e `email` até 80; `senha` com no mínimo 6.
 - `POST /auth/login` e `POST /auth/empresa`: `email` é aparado e passado para minúsculas antes da validação (`@IsEmail`).
 - `POST /insumos` e `PATCH /insumos/:id`: `nome` aparado, não vazio e com até 80 caracteres; `quantidadeBaseCusto ≥ 0.000001`; `valorPago ≥ 0`; `unidade` do enum `UnidadeMedida`; `quantidadeDisponivelInicial ≥ 0` só no `POST` (no `PATCH` → 400). `DELETE` de insumo usado em receita → 409 `INSUMO_EM_USO`.
-- `POST /gastos-indiretos` e `PUT /gastos-indiretos/:id`: `descricao` aparada, não vazia e com até 100 caracteres; `valor ≥ 0`; `metodo_rateio` do enum `MetodoRateio`. Gasto de outra empresa → 404 `GASTO_INDIRETO_NAO_ENCONTRADO`.
+- `POST /gastos-indiretos` e `PUT /gastos-indiretos/:id`: `descricao` aparada, não vazia e com até 100 caracteres; `valor ≥ 0`. Gasto de outra empresa → 404 `GASTO_INDIRETO_NAO_ENCONTRADO`.
+  - **Muda (BE-26):** `tipo` (enum `TipoGasto`: `MENSAL`, `POR_UNIDADE`, `PERCENTUAL_VENDA`) substitui o `metodo_rateio`. Para o frontend atual não quebrar, o `metodo_rateio` (`FIXO`, `PROPORCIONAL`, `POR_UNIDADE`) continua aceito: `FIXO` e `PROPORCIONAL` viram `MENSAL`, `POR_UNIDADE` continua `POR_UNIDADE`. No `POST`, um dos dois é obrigatório (sem nenhum → 400 no campo `tipo`); se vierem os dois, vale o `tipo`. No `PUT`, um `metodo_rateio` igual ao `metodoRateio` que a resposta mostra para o tipo salvo mantém o tipo (o formulário atual reenvia o que recebeu; um `PERCENTUAL_VENDA` não vira `MENSAL` só por isso).
+  - `PERCENTUAL_VENDA` com `valor` fora de `0 ≤ valor < 1` (fração do preço: `0.12` = 12%) → 400 `DADOS_INVALIDOS` com `details` no campo `valor`, conferido depois de mesclar o `PUT` com o salvo.
 - `POST /receitas` e `PUT /receitas/:id`: `nome` aparado, não vazio e com até 80 caracteres; `rendimento` inteiro > 0; `unidadeRendimento` do enum `UnidadeMedida`; `margem_lucro ≥ 0` (fração); `insumos` não vazio, com `insumo_id` inteiro > 0 e `quantidade ≥ 0.001`. Insumo de outra empresa → 404 `INSUMO_NAO_ENCONTRADO`; receita de outra empresa → 404 `RECEITA_NAO_ENCONTRADA`. No `PUT`, `margem_lucro: null` remove a margem e o preço sugerido. `DELETE` de receita usada em produção ou venda → 409 `RECEITA_EM_USO`.
 - `POST /receitas/:id/custo/simular`: `quantidadeLotes` inteiro > 0. `POST /receitas/:id/simular`: `novoCusto` e `novoPreco` > 0 e `volume` inteiro > 0, todos opcionais (omitidos usam o custo unitário, o preço sugerido e o rendimento salvos); sem custo → 400 `RECEITA_SEM_CUSTO`, sem preço → 400 `RECEITA_SEM_PRECO`, preço salvo 0 → 400 `PRECO_INVALIDO`. `POST /receitas/:id/preco-venda`: `margem_lucro ≥ 0`; receita sem custo → 400 `RECEITA_SEM_CUSTO`. As quatro rotas não gravam nada e dão 404 `RECEITA_NAO_ENCONTRADA` para receita de outra empresa.
 - `GET /producoes?receitaId=`: `receitaId` inteiro > 0 opcional; inválido → 400 `DADOS_INVALIDOS`. Receita de outra empresa só devolve lista vazia.
@@ -115,7 +117,7 @@ Arquivo novo em `contracts/` entra na lista do `for`. Se o teste falhar depois d
 | Tipo | Campos |
 | --- | --- |
 | `Insumo` | `id`, `empresaId`, `nome`, `quantidadeBaseCusto`, `quantidadeDisponivel`, `quantidadeMinima` (**novo**), `unidade`, `valorPago`, `custoUnitario`, `precoUnitario` (alias de `custoUnitario`), `dataCriacao` |
-| `GastoIndireto` | `id`, `empresaId`, `descricao`, `valor`, `metodoRateio` |
+| `GastoIndireto` | `id`, `empresaId`, `descricao`, `valor`, `tipo` (**novo**, BE-26: `MENSAL \| POR_UNIDADE \| PERCENTUAL_VENDA`), `metodoRateio` (**legado**, derivado do `tipo` para o schema atual do frontend: `FIXO` para `MENSAL` e `PERCENTUAL_VENDA`, `POR_UNIDADE` para `POR_UNIDADE`; sai quando o frontend passar a usar o `tipo`, BE-33) |
 | `Receita` | `id`, `empresaId`, `nome`, `rendimento` (inteiro), `unidadeRendimento`, `custoProducao`, `custoUnitario`, `margemLucro`, `precoSugerido` (os quatro omitidos sem valor), `dataCriacao`, `itens: [{ insumoId, quantidade, custoCalculado (omitido sem valor) }]` |
 | `ReceitaCusto` | `quantidade_lotes`, `total_unidades`, `custo_invisivel`, `custo_total_producao`, `custo_por_unidade` |
 | `SimulacaoCenario` | `custoUnitario`, `precoVenda`, `volume`, `lucroEstimado`, `margemProjetada` (fração), `breakEven` |

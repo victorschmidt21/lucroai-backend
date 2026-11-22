@@ -34,7 +34,7 @@ Valores e quantidades são `Float` no banco (`double precision`) e `number` na A
 | Enum | Valores |
 | --- | --- |
 | `UnidadeMedida` | `G`, `KG`, `ML`, `L`, `UN` |
-| `MetodoRateio` | `FIXO`, `PROPORCIONAL`, `POR_UNIDADE` |
+| `TipoGasto` (**muda**, BE-26; substitui o `MetodoRateio`) | `MENSAL`, `POR_UNIDADE`, `PERCENTUAL_VENDA` |
 | `StatusVenda` | `PENDENTE`, `CONCLUIDA`, `CANCELADA` |
 | `TipoMovimentacaoEstoque` | `ENTRADA`, `SAIDA` |
 | `OrigemMovimentacaoEstoque` | `COMPRA`, `PRODUCAO` |
@@ -112,28 +112,34 @@ custoUnitario = quantidadeBaseCusto > 0 ? valorPago / quantidadeBaseCusto : 0
 
 ## Gastos indiretos e rateio
 
-Origem do cadastro: `catalog-service/src/modules/gastos-indiretos/` (`create-gasto-indireto.dto.ts`). Origem do rateio: `operations-service/src/modules/producoes/application/services/producao.service.ts` (`calcularValorRateado`) e `recipe-service/src/modules/custos/infra/providers/default-custo-invisivel-result.provider.ts`, que têm a mesma fórmula.
+Origem do cadastro: `catalog-service/src/modules/gastos-indiretos/` (`create-gasto-indireto.dto.ts`). **Muda (BE-26):** o rateio dos microsserviços (`calcularValorRateado` do `producao.service.ts` e do `default-custo-invisivel-result.provider.ts`) foi removido: ele cobrava os gastos do mês inteiros em cada lote de cada receita (o pão francês do seed chegava a R$ 270). Cada gasto passa a ter um **tipo**, que diz como ele entra no custo.
 
-- Descrição até 100 caracteres, `valor ≥ 0`, `metodo_rateio` obrigatório. **Muda (BE-08):** a descrição passa a ser obrigatória e aparada.
+| `tipo` | O que é o `valor` | Exemplos | Parte no custo de `lotes` lotes |
+| --- | --- | --- | --- |
+| `MENSAL` | valor do mês | aluguel, luz, gás, água, DAS do MEI, internet | `valor × usoPorLote × lotes ÷ capacidadeMensal` |
+| `POR_UNIDADE` | reais por unidade vendida que não é da ficha | saco de pão genérico, etiqueta | `valor × totalUnidades` |
+| `PERCENTUAL_VENDA` | fração do preço (0 a menos de 1) | comissão de revendedora | 0: não é custo; entra nos percentuais do preço (BE-28) |
+
+- `capacidadeMensal` vem da [configuração de custos](#configuração-de-custos). `usoPorLote` é o uso de forno do lote (fornadas ou minutos), que a ficha técnica ganha na BE-27; até lá, **todo lote ocupa 1**. Com isso, um gasto mensal de R$ 1.800 e a capacidade padrão de 40 fornadas custam R$ 45 por lote, nunca R$ 1.800.
+- `totalUnidades = lotes × rendimento`. O `POR_UNIDADE` sempre foi valor por unidade; o seed antigo é que gravava R$ 120 de embalagem como se fosse o total do mês.
+- Sem arredondamento (BE-23): a parte do gasto entra no custo da receita e da produção sem arredondar.
+- Funções puras em `gastos-indiretos/domain/gastos-indiretos.calculos.ts`: `calcularGastoNoCusto(gasto, { lotes, totalUnidades, capacidadeMensal, usoPorLote? })`, usada pelas receitas e pelas produções; `validarGasto`; e a compatibilidade com o `metodo_rateio` (`tipoDoMetodoRateio`, `metodoRateioDoTipo`, `resolverTipoGasto`).
+- Migration `recria_tipo_gasto`: troca a coluna `metodo_rateio` pela `tipo` e o enum `MetodoRateio` pelo `TipoGasto`. Não há dados reais; os gastos dos bancos de desenvolvimento e de teste são convertidos como o `metodo_rateio` legado (abaixo).
+
+Cadastro:
+
+- Descrição até 100 caracteres, `valor ≥ 0`, `tipo` obrigatório. **Muda (BE-08):** a descrição passa a ser obrigatória e aparada.
+- **Validação por tipo (BE-26, `validarGasto`):** `PERCENTUAL_VENDA` exige `0 ≤ valor < 1` (um gasto de 100% do preço não deixa preço possível); fora disso → 400 `DADOS_INVALIDOS` com `details` no campo `valor`. `MENSAL` e `POR_UNIDADE` aceitam qualquer `valor ≥ 0`. No `PUT`, a conferência é feita depois de mesclar com o salvo (trocar só o tipo para `PERCENTUAL_VENDA` de um gasto de R$ 1.800 → 400).
+- **Compatibilidade com o frontend atual (BE-26):** o frontend ainda envia `metodo_rateio` e valida `metodoRateio` na resposta (`FIXO`, `PROPORCIONAL`, `POR_UNIDADE`). Por isso:
+  - a entrada aceita `metodo_rateio` no lugar de `tipo`: `FIXO` e `PROPORCIONAL` viram `MENSAL` (eram os valores do mês) e `POR_UNIDADE` continua `POR_UNIDADE`. Se vierem os dois, vale o `tipo`;
+  - a resposta traz o `tipo` (campo novo) e um `metodoRateio` derivado: `POR_UNIDADE` para `POR_UNIDADE` e `FIXO` para os outros (o `PERCENTUAL_VENDA` não tem equivalente; `FIXO` é o de menor efeito no cálculo local do frontend);
+  - no `PUT`, um `metodo_rateio` igual ao `metodoRateio` mostrado para o tipo salvo mantém o tipo, porque o formulário atual reenvia o método que recebeu; sem isso, editar a descrição de um `PERCENTUAL_VENDA` o transformaria em `MENSAL`.
+  - Um gasto criado como `PROPORCIONAL` volta como `FIXO`: o frontend aceita, e os dois viraram o mesmo tipo. O legado sai quando o frontend passar a usar o `tipo` (BE-33).
 - `valor` é gravado como veio, sem `round2`, como no catalog-service.
 - Listagem por `id` decrescente (o mais novo primeiro), como hoje. `PUT` com campos opcionais: campo omitido mantém o valor salvo.
 - Gasto de outra empresa ou inexistente → 404 `GASTO_INDIRETO_NAO_ENCONTRADO`.
 - Excluir um gasto não apaga os rateios das produções antigas: `rateio_producao.gasto_indireto_id` não tem FK e guarda o id, como nos microsserviços, e o rateio guarda a `descricao`. **Muda (BE-12):** a BE-05 previa `SET NULL`, mas o `gastoIndiretoId` nulo quebraria o schema do frontend (`z.number().int()`, que mostra "Gasto #id").
 - Para outros módulos, `GastoIndiretoService` exporta `listarPorEmpresa(empresaId, tx?)` e `buscarVariosDaEmpresa(ids, empresaId, tx?)`. Este último ignora ids repetidos, devolve `[]` para lista vazia e responde 404 se algum id não existir ou for de outra empresa (base da correção da lacuna 11, aplicada na produção pela BE-12).
-
-Rateio de um gasto para `lotes` lotes de uma receita com `totalUnidades = lotes × rendimento`:
-
-| Método | Valor rateado |
-| --- | --- |
-| `FIXO` | `valor` |
-| `PROPORCIONAL` | `valor × lotes` |
-| `POR_UNIDADE` | `valor × totalUnidades` |
-
-**Muda (BE-23):** sem o `round2` de hoje; o valor rateado entra no custo da receita e da produção sem arredondar.
-
-Método desconhecido cai no `FIXO` (o `default` do `switch`). Com o enum validado no DTO e no banco, isso não acontece no monolito: o `switch` é exaustivo sobre o tipo `MetodoRateio`, sem `default`.
-
-A função `calcularValorRateado` fica em `gastos-indiretos/domain/gastos-indiretos.calculos.ts` (BE-08) e é usada pelas receitas (custo invisível) e pelas produções.
 
 ## Receitas: custo
 
@@ -146,7 +152,7 @@ quantidadeItem    = item.quantidade × lotes
 custoCalculado    = quantidadeItem × insumo.custoUnitario                // por item
 custoIngredientes = Σ custoCalculado
 totalUnidades     = rendimento × lotes
-custoInvisivel    = Σ calcularValorRateado(gasto, lotes, totalUnidades)  // TODOS os gastos da empresa
+custoInvisivel    = Σ calcularGastoNoCusto(gasto, { lotes, totalUnidades, capacidadeMensal })  // TODOS os gastos, pelo tipo (BE-26)
 custoProducao     = custoIngredientes + custoInvisivel
 custoUnitario     = custoProducao / totalUnidades                       // rendimento ≤ 0 → 400
 precoSugerido     = custoUnitario × (1 + margem)                        // só se margem != null
@@ -154,10 +160,10 @@ precoSugerido     = custoUnitario × (1 + margem)                        // só 
 
 **Muda (BE-23):** hoje cada linha arredonda com `round2`; o monolito não arredonda no meio e grava os valores exatos. A resposta arredonda (`custoCalculado`, `custoProducao` e `custo_invisivel` com 2 casas; `custoUnitario` e `precoSugerido` com 4), ver [Arredondamento](#arredondamento).
 
-- **Custo invisível (lacuna 18, mantida na BE-09):** soma o rateio de **todos** os gastos indiretos da empresa, não só dos escolhidos. Com o Aluguel de R$ 1.800 `FIXO`, o custo de produção de toda receita sobe R$ 1.800. Mudar a regra pede uma issue própria, porque muda os números que o frontend mostra.
+- **Custo invisível (lacuna 18):** soma **todos** os gastos indiretos da empresa. **Muda (BE-26):** cada gasto entra pelo [tipo](#gastos-indiretos-e-rateio): o mensal dividido pela capacidade mensal (1 fornada por lote até a BE-27), o por unidade multiplicado pelas unidades e o percentual de venda fora do custo. Antes, o Aluguel de R$ 1.800 `FIXO` subia R$ 1.800 o custo de cada receita; agora sobe R$ 45 com a capacidade padrão de 40. A fórmula nova de custo e preço por canal é da BE-28.
 - O resultado do custo invisível precisa ser finito e ≥ 0, senão 400 (`obterCustoInvisivel`). Com valores ≥ 0 validados no cadastro, isso não acontece, e o monolito não repete a conferência.
 - Rendimento ≤ 0 → 400 `RENDIMENTO_INVALIDO` "Rendimento da receita deve ser maior que zero" (`validarRendimento`). O DTO já exige inteiro positivo.
-- Funções puras em `receitas/domain/receitas.calculos.ts`: `calcularCustoItem`, `calcularCustoInvisivel(gastos, rendimento, lotes = 1)` (usa `calcularValorRateado` de `gastos-indiretos`), `calcularPrecoSugerido`, `calcularCustoReceita` (`lotes` opcional, 1 por padrão; devolve também `lotes` e `totalUnidades`), `resolverMargem` e `precisaRecalcular` (BE-09); `simularCenario` e `calcularPrecoVenda` (BE-10). O service busca os insumos por `InsumoService.buscarVariosDaEmpresa` e os gastos por `GastoIndiretoService.listarPorEmpresa`, sem HTTP.
+- Funções puras em `receitas/domain/receitas.calculos.ts`: `calcularCustoItem`, `calcularCustoInvisivel(gastos, rendimento, capacidadeMensal, lotes = 1)` (usa `calcularGastoNoCusto` de `gastos-indiretos`), `calcularPrecoSugerido`, `calcularCustoReceita` (`lotes` opcional, 1 por padrão; devolve também `lotes` e `totalUnidades`), `resolverMargem` e `precisaRecalcular` (BE-09); `simularCenario` e `calcularPrecoVenda` (BE-10). O service busca os insumos por `InsumoService.buscarVariosDaEmpresa`, os gastos por `GastoIndiretoService.listarPorEmpresa` e a capacidade mensal por `ConfiguracaoCustosService.buscarDaEmpresa` (BE-26), sem HTTP.
 - Margem é **fração** (`0.6` = 60%), `≥ 0`.
 - O item guarda `custoCalculado` para 1 lote. A receita guarda `custoProducao`, `custoUnitario`, `margemLucro` e `precoSugerido`; sem valor, esses campos são **omitidos** na resposta.
 - Validação do corpo (`create-receita.dto.ts`): nome até 80, `rendimento` inteiro > 0, `quantidade` do item ≥ 0.001, `insumo_id` inteiro > 0. **Muda (BE-09):** a lista de insumos não pode ser vazia (400), os insumos precisam ser da empresa (404 `INSUMO_NAO_ENCONTRADO`), e o nome passa a ser aparado e obrigatório (como o do insumo e o do gasto).
@@ -257,7 +263,8 @@ gastos          = gasto_indireto_ids omitido → todos os gastos da empresa
                   gasto_indireto_ids = []    → nenhum gasto
 totalUnidades   = quantidade × receita.rendimento
 custoBase       = receita.custoProducao × quantidade        // custo SALVO da receita (0 se ausente), sem arredondar
-rateios         = gastos.map(g => calcularValorRateado(g, quantidade, totalUnidades))
+rateios         = gastos sem PERCENTUAL_VENDA
+                    .map(g => calcularGastoNoCusto(g, { lotes: quantidade, totalUnidades, capacidadeMensal }))
 custoTotal      = custoBase + Σ rateios
 custoUnitario   = totalUnidades > 0 ? custoTotal / totalUnidades : 0
 ```
@@ -265,11 +272,12 @@ custoUnitario   = totalUnidades > 0 ? custoTotal / totalUnidades : 0
 **Muda (BE-23):** sem o `round2` de hoje; a produção grava os valores exatos e a resposta mostra `custoTotal` e `valorRateado` com 2 casas e `custoUnitario` com 4.
 
 - `quantidade` é o número de **lotes** (inteiro > 0).
-- O `custoProducao` salvo da receita já contém o custo invisível de 1 lote com todos os gastos (lacuna 18). Por isso os gastos rateados na produção entram **de novo** no `custoTotal`. É o comportamento atual e fica mantido junto com a lacuna 18.
+- O `custoProducao` salvo da receita já contém o custo invisível de 1 lote com todos os gastos (lacuna 18). Por isso os gastos rateados na produção entram **de novo** no `custoTotal`. É o comportamento atual e fica mantido até a BE-30, que tira a duplicidade.
+- **Muda (BE-26):** cada gasto é rateado pelo tipo, com a `capacidadeMensal` da configuração de custos da empresa (buscada na mesma transação): o mensal não entra mais inteiro. `PERCENTUAL_VENDA` é fração do preço, não custo, e não gera rateio.
 - Efeitos, **numa transação só** no monolito (BE-12): grava a produção e os rateios, dá baixa nos insumos (seção anterior) e dá entrada de `totalUnidades` no estoque de produto acabado da receita. Hoje são chamadas HTTP e eventos sem compensação.
 - **Muda (BE-12):** a receita e os gastos precisam ser da empresa do token (lacuna 11); a produção grava `totalUnidades` (lacuna 23) e a descrição do gasto em cada rateio.
 - **Muda (BE-12):** id repetido em `gasto_indireto_ids` conta uma vez (`buscarVariosDaEmpresa`); hoje cada repetição soma o rateio de novo.
-- Função pura `calcularProducao(receita, lotes, gastos)` em `producoes/domain/producoes.calculos.ts`, com o `calcularValorRateado` da BE-08. Os rateios saem na ordem dos gastos (com o id omitido, a de `GET /gastos-indiretos`: id decrescente).
+- Função pura `calcularProducao(receita, lotes, gastos, capacidadeMensal)` em `producoes/domain/producoes.calculos.ts`, com o `calcularGastoNoCusto` da BE-26. Os rateios saem na ordem dos gastos (com o id omitido, a de `GET /gastos-indiretos`: id decrescente).
 - Uma falha em qualquer passo (ex.: insumo sem registro de estoque → 404) desfaz tudo: produção, rateios, baixas e entrada de produto acabado.
 
 ## Estoque de produto acabado
@@ -333,7 +341,7 @@ A lista numerada está em [`lucroai-frontend/docs/api-integration.md#lacunas-do-
 | 15 | `ReceitaCusto` em `snake_case` | mantida | BE-10 | é o contrato do frontend |
 | 16 | links HATEOAS incorretos | corrigida | BE-04 | sem envelope: a resposta é o JSON do recurso |
 | 17 | seeds com `EMPRESA_ID = 1` fixo | corrigida | BE-14 | um seed só, pelos ids reais |
-| 18 | custo invisível soma todos os gastos da empresa | mantida | BE-09 | muda os números que o frontend mostra; o seed passa a gravar com a mesma regra (BE-14), então seed e API batem |
+| 18 | custo invisível soma todos os gastos da empresa | corrigida em parte | BE-09, BE-26 | continua somando todos os gastos (é a regra do cálculo novo), mas pelo tipo: o gasto mensal é dividido pela capacidade mensal e não entra mais inteiro em cada lote (BE-26); a duplicidade na produção sai na BE-30. O seed grava com a mesma regra, então seed e API batem |
 | 19 | `GET /estoque/insumos/:id` de insumo inexistente → 404 | mantida | BE-11 | é o comportamento certo (inexistente ou de outra empresa) |
 | 20 | preço de venda sem arredondamento | corrigida | BE-10, BE-23 | 4 casas na resposta (`round4`); a BE-10 usava `round2` |
 | 21 | `PUT /receitas/:id` não remove a margem | corrigida | BE-09 | `margem_lucro: null` limpa margem e preço sugerido |

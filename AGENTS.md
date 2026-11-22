@@ -113,7 +113,7 @@ Antes de dizer que terminou: `npm run lint && npm run format:check && npm run bu
 | --- | --- | --- |
 | Pasta do módulo | plural, `kebab-case` | `gastos-indiretos` |
 | Módulo | `<modulo>.module.ts` | `GastosIndiretosModule` |
-| Funções puras | `domain/<modulo>.calculos.ts` | `calcularValorRateado` |
+| Funções puras | `domain/<modulo>.calculos.ts` | `calcularGastoNoCusto` |
 | Service | `application/services/<entidade>.service.ts` | `GastoIndiretoService` |
 | DTO de entrada | `create-<entidade>.dto.ts`, `update-<entidade>.dto.ts` | `CreateGastoIndiretoDto` |
 | DTO de saída | `<entidade>.dto.ts` | `GastoIndiretoDto` + `toGastoIndiretoDto` |

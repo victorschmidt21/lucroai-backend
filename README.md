@@ -47,7 +47,7 @@ npm run start:dev
 
 `npm run db:seed` cria a **Padaria Pão Feliz Ltda** com 12 insumos (3 abaixo do mínimo), 4 gastos indiretos, 4 receitas, 4 produções e 8 vendas (concluídas, uma pendente e uma cancelada) espalhadas pelos últimos 6 meses. Login: **`joao@padariapaofeliz.com.br` / `123456`** (ou `maria@padariapaofeliz.com.br`, mesma senha), com os dados na mesma empresa.
 
-O seed (`prisma/seed.ts`) é idempotente: apaga e recria os dados da empresa do seed (achada pelo CNPJ), sem tocar nas outras. Os custos são calculados com as funções de `domain/` dos módulos, então batem com os da API (ex.: Pão Francês com custo de produção R$ 8.438,31, unitário R$ 168,77 e preço sugerido R$ 270,03). Recusa rodar com `NODE_ENV=production`. Com Docker: `docker compose exec api npm run db:seed`.
+O seed (`prisma/seed.ts`) é idempotente: apaga e recria os dados da empresa do seed (achada pelo CNPJ), sem tocar nas outras. Os custos são calculados com as funções de `domain/` dos módulos, então batem com os da API (ex.: Pão Francês com custo de produção R$ 69,18, unitário R$ 1,3836 e preço sugerido R$ 2,2138). Recusa rodar com `NODE_ENV=production`. Com Docker: `docker compose exec api npm run db:seed`.
 
 ## Scripts
 

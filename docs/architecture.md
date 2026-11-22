@@ -41,11 +41,11 @@ Cada tabela pertence a **um** módulo, e só ele lê e escreve nela pelo Prisma.
 | `auth` | `Empresa`, `Usuario` | cadastro de empresa (com a configuração de custos e os canais de venda padrão na mesma transação), login e JWT (assinado com o `JwtService` do `JwtAuthModule`); não exporta service | `configuracao-custos`, `canais` | BE-06, BE-24, BE-25 |
 | `estoque` | `Estoque`, `MovimentacaoEstoque`, `EstoqueProdutoAcabado`, `MovimentacaoProdutoAcabado` | saldo e histórico de insumos e de produto acabado; exporta `EstoqueService` (`criarRegistroInicial` e `saldosPorInsumo` desde a BE-07; `baixarPorProducao(itens, lotes, producaoId, empresaId, tx)` desde a BE-11) e `EstoqueProdutoAcabadoService` (`entradaPorProducao(receitaId, totalUnidades, producaoId, empresaId, tx)` e `saidaPorVenda(receitaId, quantidade, vendaId, empresaId, tx)` desde a BE-12) | — | BE-07, BE-11, BE-12 |
 | `insumos` | `Insumo` | cadastro de insumos e custo unitário; cria o estoque inicial na mesma transação; exporta `InsumoService` (`buscarVariosDaEmpresa` desde a BE-09) | `estoque` | BE-07 |
-| `configuracao-custos` | `ConfiguracaoCustos` | configuração de custos da empresa (base de rateio, capacidade mensal, lucro, imposto e maquininha), com os padrões e a validação (`validarConfiguracaoCustos`); exporta `ConfiguracaoCustosService` (`criarPadrao(empresaId, tx)`) | — | BE-24 |
+| `configuracao-custos` | `ConfiguracaoCustos` | configuração de custos da empresa (base de rateio, capacidade mensal, lucro, imposto e maquininha), com os padrões e a validação (`validarConfiguracaoCustos`); exporta `ConfiguracaoCustosService` (`criarPadrao(empresaId, tx)` e `buscarDaEmpresa(empresaId, tx?)`) | — | BE-24, BE-26 |
 | `canais` | `CanalVenda` | canais de venda com comissão (Balcão, iFood…), CRUD em `/canais`, com os padrões (`CANAIS_PADRAO`) e a regra do Balcão (`garantirCanalExcluivel`); exporta `CanalVendaService` (`criarPadrao(empresaId, tx)`) | — | BE-25 |
-| `gastos-indiretos` | `GastoIndireto` | cadastro de gastos e cálculo do rateio (`calcularValorRateado`); exporta `GastoIndiretoService` (`listarPorEmpresa` e `buscarVariosDaEmpresa`) | — | BE-08 |
-| `receitas` | `Receita`, `ItemReceita` | receitas, custo para 1 ou N lotes (`calcularCustoReceita`), simulação (`simularCenario`) e preço de venda (`calcularPrecoVenda`), sem gravar; exporta `ReceitaService` (`buscarDaEmpresa`) | `insumos`, `gastos-indiretos` | BE-09, BE-10 |
-| `producoes` | `Producao`, `RateioProducao` | produção com rateio (`calcularProducao`), baixa de insumos e entrada de produto acabado, numa transação só; não exporta service | `receitas`, `gastos-indiretos`, `estoque` | BE-12 |
+| `gastos-indiretos` | `GastoIndireto` | cadastro de gastos por tipo (`MENSAL`, `POR_UNIDADE`, `PERCENTUAL_VENDA`), validação por tipo (`validarGasto`) e a parte de cada gasto no custo (`calcularGastoNoCusto`); exporta `GastoIndiretoService` (`listarPorEmpresa` e `buscarVariosDaEmpresa`) | — | BE-08, BE-26 |
+| `receitas` | `Receita`, `ItemReceita` | receitas, custo para 1 ou N lotes (`calcularCustoReceita`), simulação (`simularCenario`) e preço de venda (`calcularPrecoVenda`), sem gravar; exporta `ReceitaService` (`buscarDaEmpresa`) | `insumos`, `gastos-indiretos`, `configuracao-custos` | BE-09, BE-10, BE-26 |
+| `producoes` | `Producao`, `RateioProducao` | produção com rateio (`calcularProducao`), baixa de insumos e entrada de produto acabado, numa transação só; não exporta service | `receitas`, `gastos-indiretos`, `estoque`, `configuracao-custos` | BE-12, BE-26 |
 | `vendas` | `Venda`, `ItemVenda` | vendas com a entidade `Venda` (total, margem e transições de status) e conclusão com baixa de produto acabado (`saidaPorVenda`) na mesma transação; não exporta service | `receitas`, `estoque` | BE-13 |
 
 ### Tabelas e donos
@@ -133,7 +133,7 @@ Só o módulo `vendas` tem também `domain/venda.entity.ts` (e o `venda.entity.s
 ## Comunicação entre módulos
 
 1. **Service exportado.** O módulo A coloca `BModule` em `imports` e injeta um service listado em `exports` do `BModule`. Esses métodos devolvem DTOs.
-2. **Funções puras.** A pode importar `src/modules/<b>/domain/<b>.calculos.ts` de um módulo do qual depende (ex.: `receitas` e `producoes` usam `calcularValorRateado` de `gastos-indiretos`). É o único arquivo interno de outro módulo que se pode importar.
+2. **Funções puras.** A pode importar `src/modules/<b>/domain/<b>.calculos.ts` de um módulo do qual depende (ex.: `receitas` e `producoes` usam `calcularGastoNoCusto` de `gastos-indiretos`). É o único arquivo interno de outro módulo que se pode importar.
 3. **Transação.** Quem orquestra abre a transação e passa o `tx` aos services dos outros módulos, que o repassam aos repositórios. Tudo ou nada:
 
    ```ts
@@ -187,31 +187,44 @@ Qualquer exceção → AllExceptionsFilter → { statusCode, code, message, deta
 
 ### `domain/gastos-indiretos.calculos.ts`
 
-```ts
-export type MetodoRateio = 'FIXO' | 'PROPORCIONAL' | 'POR_UNIDADE';
+Resumo; o arquivo real tem também a compatibilidade com o `metodo_rateio` antigo (`tipoDoMetodoRateio`, `metodoRateioDoTipo` e `resolverTipoGasto`, BE-26).
 
-export interface GastoParaRateio {
+```ts
+import { InvalidInputError } from '../../../shared/domain/errors/domain.error.js';
+
+export type TipoGasto = 'MENSAL' | 'POR_UNIDADE' | 'PERCENTUAL_VENDA';
+
+export interface GastoParaCusto {
   valor: number;
-  metodoRateio: MetodoRateio;
+  tipo: TipoGasto;
 }
 
-/**
- * Valor de um gasto rateado para `lotes` lotes que rendem `totalUnidades`.
- * Origem: producao.service.ts (calcularValorRateado) do operations-service.
- * Sem arredondamento (BE-23): o valor entra no custo da receita e da produção.
- */
-export function calcularValorRateado(
-  gasto: GastoParaRateio,
-  lotes: number,
-  totalUnidades: number,
-): number {
-  switch (gasto.metodoRateio) {
-    case 'FIXO':
-      return gasto.valor;
-    case 'PROPORCIONAL':
-      return gasto.valor * lotes;
+export interface UsoDoGasto {
+  lotes: number;
+  totalUnidades: number;
+  capacidadeMensal: number;
+  /** Até a ficha técnica ganhar o campo (BE-27), todo lote ocupa 1. */
+  usoPorLote?: number;
+}
+
+/** Parte de um gasto no custo de `lotes` lotes (BE-26), sem arredondar (BE-23). */
+export function calcularGastoNoCusto(gasto: GastoParaCusto, uso: UsoDoGasto): number {
+  switch (gasto.tipo) {
+    case 'MENSAL':
+      return (gasto.valor * (uso.usoPorLote ?? 1) * uso.lotes) / uso.capacidadeMensal;
     case 'POR_UNIDADE':
-      return gasto.valor * totalUnidades;
+      return gasto.valor * uso.totalUnidades;
+    case 'PERCENTUAL_VENDA':
+      return 0; // fração do preço, não custo (BE-28)
+  }
+}
+
+/** `PERCENTUAL_VENDA` é fração do preço: 0 ≤ valor < 1. */
+export function validarGasto(gasto: GastoParaCusto): void {
+  if (gasto.tipo === 'PERCENTUAL_VENDA' && (gasto.valor < 0 || gasto.valor >= 1)) {
+    throw new InvalidInputError('DADOS_INVALIDOS', 'Os dados enviados são inválidos', [
+      { field: 'valor', messages: ['valor de um gasto PERCENTUAL_VENDA deve ser ...'] },
+    ]);
   }
 }
 ```
@@ -220,19 +233,23 @@ export function calcularValorRateado(
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import { calcularValorRateado } from './gastos-indiretos.calculos.js';
+import { calcularGastoNoCusto, validarGasto } from './gastos-indiretos.calculos.js';
 
-describe('calcularValorRateado', () => {
-  it('FIXO não depende de lotes nem de unidades', () => {
-    expect(calcularValorRateado({ valor: 1800, metodoRateio: 'FIXO' }, 3, 150)).toBe(1800);
+const uso = { lotes: 1, totalUnidades: 50, capacidadeMensal: 40 };
+
+describe('calcularGastoNoCusto', () => {
+  it('MENSAL de R$ 1.800 não entra inteiro num lote: divide pela capacidade', () => {
+    expect(calcularGastoNoCusto({ valor: 1800, tipo: 'MENSAL' }, uso)).toBe(45);
   });
 
-  it('PROPORCIONAL multiplica pelos lotes', () => {
-    expect(calcularValorRateado({ valor: 12.5, metodoRateio: 'PROPORCIONAL' }, 3, 150)).toBe(37.5);
+  it('POR_UNIDADE é valor por unidade: multiplica pelo total de unidades', () => {
+    expect(calcularGastoNoCusto({ valor: 0.25, tipo: 'POR_UNIDADE' }, uso)).toBe(12.5);
   });
+});
 
-  it('POR_UNIDADE multiplica pelo total de unidades, sem arredondar', () => {
-    expect(calcularValorRateado({ valor: 0.015, metodoRateio: 'POR_UNIDADE' }, 1, 101)).toBeCloseTo(1.515, 12);
+describe('validarGasto', () => {
+  it('PERCENTUAL_VENDA de 12 (em vez de 0.12) → 400', () => {
+    expect(() => validarGasto({ valor: 12, tipo: 'PERCENTUAL_VENDA' })).toThrow();
   });
 });
 ```
@@ -241,8 +258,9 @@ describe('calcularValorRateado', () => {
 
 ```ts
 import { Transform } from 'class-transformer';
-import { IsEnum, IsNotEmpty, IsNumber, IsString, MaxLength, Min } from 'class-validator';
-import { MetodoRateio } from '../../../../generated/prisma/client.js';
+import { IsEnum, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, MaxLength, Min, ValidateIf } from 'class-validator';
+import { TipoGasto } from '../../../../generated/prisma/client.js';
+import { METODOS_RATEIO, type MetodoRateio } from '../../domain/gastos-indiretos.calculos.js';
 
 export class CreateGastoIndiretoDto {
   /** @example 'Aluguel' */
@@ -257,9 +275,15 @@ export class CreateGastoIndiretoDto {
   @Min(0)
   valor: number;
 
-  /** Nome em snake_case, como no contrato do frontend. @example 'FIXO' */
-  @IsEnum(MetodoRateio)
-  metodo_rateio: MetodoRateio;
+  /** Obrigatório se `metodo_rateio` não vier. @example 'MENSAL' */
+  @ValidateIf((dto: CreateGastoIndiretoDto) => dto.metodo_rateio === undefined)
+  @IsEnum(TipoGasto)
+  tipo?: TipoGasto;
+
+  /** Legado, em snake_case como no contrato do frontend. @deprecated Use `tipo`. @example 'FIXO' */
+  @IsOptional()
+  @IsIn(METODOS_RATEIO)
+  metodo_rateio?: MetodoRateio;
 }
 ```
 
@@ -275,7 +299,8 @@ export class UpdateGastoIndiretoDto extends PartialType(CreateGastoIndiretoDto) 
 ### `application/dto/gasto-indireto.dto.ts`
 
 ```ts
-import type { GastoIndireto, MetodoRateio } from '../../../../generated/prisma/client.js';
+import type { GastoIndireto, TipoGasto } from '../../../../generated/prisma/client.js';
+import { metodoRateioDoTipo, type MetodoRateio } from '../../domain/gastos-indiretos.calculos.js';
 
 export class GastoIndiretoDto {
   /** @example 1 */
@@ -286,7 +311,9 @@ export class GastoIndiretoDto {
   descricao: string;
   /** @example 1800 */
   valor: number;
-  /** @example 'FIXO' */
+  /** @example 'MENSAL' */
+  tipo: TipoGasto;
+  /** Legado, derivado do `tipo`. @deprecated Use `tipo`. @example 'FIXO' */
   metodoRateio: MetodoRateio;
 }
 
@@ -296,7 +323,8 @@ export function toGastoIndiretoDto(row: GastoIndireto): GastoIndiretoDto {
     empresaId: row.empresaId,
     descricao: row.descricao,
     valor: row.valor,
-    metodoRateio: row.metodoRateio,
+    tipo: row.tipo,
+    metodoRateio: metodoRateioDoTipo(row.tipo),
   };
 }
 ```
@@ -305,14 +333,14 @@ export function toGastoIndiretoDto(row: GastoIndireto): GastoIndiretoDto {
 
 ```ts
 import { Injectable } from '@nestjs/common';
-import type { GastoIndireto, MetodoRateio } from '../../../../generated/prisma/client.js';
+import type { GastoIndireto, TipoGasto } from '../../../../generated/prisma/client.js';
 import { PrismaService } from '../../../../shared/infra/database/prisma.service.js';
 import type { PrismaTransaction } from '../../../../shared/infra/database/prisma.transaction.js';
 
 interface GastoIndiretoData {
   descricao: string;
   valor: number;
-  metodoRateio: MetodoRateio;
+  tipo: TipoGasto;
 }
 
 @Injectable()
@@ -358,6 +386,7 @@ import { Injectable } from '@nestjs/common';
 import type { GastoIndireto } from '../../../../generated/prisma/client.js';
 import { NotFoundError } from '../../../../shared/domain/errors/domain.error.js';
 import type { PrismaTransaction } from '../../../../shared/infra/database/prisma.transaction.js';
+import { resolverTipoGasto, validarGasto } from '../../domain/gastos-indiretos.calculos.js';
 import { GastoIndiretoRepository } from '../../infra/repositories/gasto-indireto.repository.js';
 import type { CreateGastoIndiretoDto } from '../dto/create-gasto-indireto.dto.js';
 import { type GastoIndiretoDto, toGastoIndiretoDto } from '../dto/gasto-indireto.dto.js';
@@ -377,21 +406,17 @@ export class GastoIndiretoService {
   }
 
   async create(dto: CreateGastoIndiretoDto, empresaId: number): Promise<GastoIndiretoDto> {
-    const row = await this.repository.create(empresaId, {
-      descricao: dto.descricao,
-      valor: dto.valor,
-      metodoRateio: dto.metodo_rateio,
-    });
+    const gasto = { valor: dto.valor, tipo: resolverTipoGasto(dto) };
+    validarGasto(gasto);
+    const row = await this.repository.create(empresaId, { descricao: dto.descricao, ...gasto });
     return toGastoIndiretoDto(row);
   }
 
   async update(id: number, dto: UpdateGastoIndiretoDto, empresaId: number): Promise<GastoIndiretoDto> {
-    await this.getOrFail(id, empresaId);
-    const row = await this.repository.update(id, {
-      descricao: dto.descricao,
-      valor: dto.valor,
-      metodoRateio: dto.metodo_rateio,
-    });
+    const atual = await this.getOrFail(id, empresaId);
+    const gasto = { valor: dto.valor ?? atual.valor, tipo: resolverTipoGasto(dto, atual.tipo) };
+    validarGasto(gasto);
+    const row = await this.repository.update(id, { descricao: dto.descricao, ...gasto });
     return toGastoIndiretoDto(row);
   }
 
