@@ -1,7 +1,11 @@
 import type {
   GastoIndireto,
-  MetodoRateio,
+  TipoGasto,
 } from '../../../../generated/prisma/client.js';
+import {
+  metodoRateioDoTipo,
+  type MetodoRateio,
+} from '../../domain/gastos-indiretos.calculos.js';
 
 export class GastoIndiretoDto {
   /** @example 1 */
@@ -12,7 +16,14 @@ export class GastoIndiretoDto {
   descricao: string;
   /** @example 1800 */
   valor: number;
-  /** @example 'FIXO' */
+  /** Como o gasto entra no custo (BE-26). @example 'MENSAL' */
+  tipo: TipoGasto;
+  /**
+   * Legado, derivado do `tipo` para o schema do frontend atual: `FIXO` para
+   * `MENSAL` e `PERCENTUAL_VENDA`, `POR_UNIDADE` para `POR_UNIDADE`.
+   * @deprecated Use `tipo`.
+   * @example 'FIXO'
+   */
   metodoRateio: MetodoRateio;
 }
 
@@ -22,6 +33,7 @@ export function toGastoIndiretoDto(row: GastoIndireto): GastoIndiretoDto {
     empresaId: row.empresaId,
     descricao: row.descricao,
     valor: row.valor,
-    metodoRateio: row.metodoRateio,
+    tipo: row.tipo,
+    metodoRateio: metodoRateioDoTipo(row.tipo),
   };
 }

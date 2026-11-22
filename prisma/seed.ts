@@ -14,9 +14,9 @@ import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import * as argon2 from 'argon2';
 import {
-  type MetodoRateio,
   PrismaClient,
   type StatusVenda,
+  type TipoGasto,
   type UnidadeMedida,
 } from '../src/generated/prisma/client.js';
 import { round2 } from '../src/shared/domain/arredondamento.js';
@@ -169,23 +169,17 @@ const INSUMOS: {
   },
 ];
 
+// Tipos da BE-26: os gastos do mês são MENSAL; a embalagem genérica é
+// POR_UNIDADE, em reais por unidade (não mais o total do mês).
 const GASTOS: {
   descricao: string;
   valor: number;
-  metodoRateio: MetodoRateio;
+  tipo: TipoGasto;
 }[] = [
-  { descricao: 'Energia Elétrica', valor: 450, metodoRateio: 'PROPORCIONAL' },
-  { descricao: 'Aluguel do Espaço', valor: 1800, metodoRateio: 'FIXO' },
-  {
-    descricao: 'Gás de Cozinha (P45)',
-    valor: 185,
-    metodoRateio: 'PROPORCIONAL',
-  },
-  {
-    descricao: 'Material de Embalagem',
-    valor: 120,
-    metodoRateio: 'POR_UNIDADE',
-  },
+  { descricao: 'Energia Elétrica', valor: 450, tipo: 'MENSAL' },
+  { descricao: 'Aluguel do Espaço', valor: 1800, tipo: 'MENSAL' },
+  { descricao: 'Gás de Cozinha (P45)', valor: 185, tipo: 'MENSAL' },
+  { descricao: 'Saquinho de Papel', valor: 0.1, tipo: 'POR_UNIDADE' },
 ];
 
 // Mesmos itens do recipe-service (quantidade por lote).
@@ -478,6 +472,7 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
       rendimento: def.rendimento,
       margemLucro: def.margemLucro,
       gastos,
+      capacidadeMensal: CONFIGURACAO_CUSTOS_PADRAO.capacidadeMensal,
     });
     const receita = await tx.receita.create({
       data: {
@@ -514,7 +509,12 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
   for (const def of PRODUCOES) {
     const r = receita(def.receita);
     const data = diasAtras(def.diasAtras);
-    const calculo = calcularProducao(r, def.lotes, gastos);
+    const calculo = calcularProducao(
+      r,
+      def.lotes,
+      gastos,
+      CONFIGURACAO_CUSTOS_PADRAO.capacidadeMensal,
+    );
     const producao = await tx.producao.create({
       data: {
         empresaId,

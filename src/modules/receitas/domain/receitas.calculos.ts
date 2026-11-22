@@ -1,8 +1,8 @@
 import { round6 } from '../../../shared/domain/arredondamento.js';
 import { InvalidInputError } from '../../../shared/domain/errors/domain.error.js';
 import {
-  calcularValorRateado,
-  type GastoParaRateio,
+  calcularGastoNoCusto,
+  type GastoParaCusto,
 } from '../../gastos-indiretos/domain/gastos-indiretos.calculos.js';
 
 export interface ItemParaCusto {
@@ -23,7 +23,9 @@ export interface CustoReceitaInput {
   rendimento: number;
   margemLucro: number | null;
   /** Todos os gastos indiretos da empresa (lacuna 18). */
-  gastos: GastoParaRateio[];
+  gastos: GastoParaCusto[];
+  /** Da configuração de custos da empresa (BE-24): divide os gastos `MENSAL`. */
+  capacidadeMensal: number;
   /** Lotes produzidos; 1 no cadastro e na edição. */
   lotes?: number;
 }
@@ -56,18 +58,20 @@ export function calcularCustoItem(
 }
 
 /**
- * Soma do rateio de **todos** os gastos da empresa para `lotes` lotes. É o
- * comportamento atual (`default-custo-invisivel-result.provider.ts`, lacuna
- * 18), mantido para não mudar os números que o frontend mostra.
+ * Soma de **todos** os gastos da empresa no custo de `lotes` lotes. **Muda
+ * (BE-26):** cada gasto entra pelo tipo (`calcularGastoNoCusto`): o mensal
+ * dividido pela capacidade mensal, não mais inteiro em cada lote. Cada lote
+ * ocupa 1 fornada (ou minuto) até a ficha técnica ter o uso de forno (BE-27).
  */
 export function calcularCustoInvisivel(
-  gastos: GastoParaRateio[],
+  gastos: GastoParaCusto[],
   rendimento: number,
+  capacidadeMensal: number,
   lotes = 1,
 ): number {
+  const uso = { lotes, totalUnidades: rendimento * lotes, capacidadeMensal };
   return gastos.reduce(
-    (total, gasto) =>
-      total + calcularValorRateado(gasto, lotes, rendimento * lotes),
+    (total, gasto) => total + calcularGastoNoCusto(gasto, uso),
     0,
   );
 }
@@ -111,6 +115,7 @@ export function calcularCustoReceita(input: CustoReceitaInput): CustoReceita {
   const custoInvisivel = calcularCustoInvisivel(
     input.gastos,
     input.rendimento,
+    input.capacidadeMensal,
     lotes,
   );
   const custoProducao = custoIngredientes + custoInvisivel;

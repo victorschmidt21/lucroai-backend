@@ -21,10 +21,13 @@ enum UnidadeMedida {
   UN
 }
 
-enum MetodoRateio {
-  PROPORCIONAL
+/// Como o gasto entra no custo (BE-26): `MENSAL` é o valor do mês, dividido
+/// pela capacidade mensal; `POR_UNIDADE` é reais por unidade vendida;
+/// `PERCENTUAL_VENDA` é fração do preço (0 a 1).
+enum TipoGasto {
+  MENSAL
   POR_UNIDADE
-  FIXO
+  PERCENTUAL_VENDA
 }
 
 enum StatusVenda {
@@ -120,11 +123,11 @@ model Insumo {
 // ---------- gastos-indiretos ----------
 
 model GastoIndireto {
-  id           Int          @id @default(autoincrement())
-  empresaId    Int          @map("empresa_id")
-  descricao    String       @db.VarChar(100)
-  valor        Float
-  metodoRateio MetodoRateio @map("metodo_rateio")
+  id        Int       @id @default(autoincrement())
+  empresaId Int       @map("empresa_id")
+  descricao String    @db.VarChar(100)
+  valor     Float
+  tipo      TipoGasto
 
   empresa Empresa @relation(fields: [empresaId], references: [id])
 

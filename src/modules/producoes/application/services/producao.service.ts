@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { NotFoundError } from '../../../../shared/domain/errors/domain.error.js';
 import { TransactionManager } from '../../../../shared/infra/database/transaction.manager.js';
+import { ConfiguracaoCustosService } from '../../../configuracao-custos/application/services/configuracao-custos.service.js';
 import { EstoqueProdutoAcabadoService } from '../../../estoque/application/services/estoque-produto-acabado.service.js';
 import { EstoqueService } from '../../../estoque/application/services/estoque.service.js';
 import { GastoIndiretoService } from '../../../gastos-indiretos/application/services/gasto-indireto.service.js';
@@ -17,6 +18,7 @@ export class ProducaoService {
     private readonly repository: ProducaoRepository,
     private readonly receitaService: ReceitaService,
     private readonly gastoIndiretoService: GastoIndiretoService,
+    private readonly configuracaoCustosService: ConfiguracaoCustosService,
     private readonly estoqueService: EstoqueService,
     private readonly estoqueProdutoAcabadoService: EstoqueProdutoAcabadoService,
     private readonly transactionManager: TransactionManager,
@@ -65,7 +67,16 @@ export class ProducaoService {
             tx,
           )
         : await this.gastoIndiretoService.listarPorEmpresa(empresaId, tx);
-      const calculo = calcularProducao(receita, dto.quantidade, gastos);
+      const configuracao = await this.configuracaoCustosService.buscarDaEmpresa(
+        empresaId,
+        tx,
+      );
+      const calculo = calcularProducao(
+        receita,
+        dto.quantidade,
+        gastos,
+        configuracao.capacidadeMensal,
+      );
 
       const producao = await this.repository.create(
         {

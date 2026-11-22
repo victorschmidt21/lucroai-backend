@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { NotFoundError } from '../../../../shared/domain/errors/domain.error.js';
 import type { PrismaTransaction } from '../../../../shared/infra/database/prisma.transaction.js';
+import { ConfiguracaoCustosService } from '../../../configuracao-custos/application/services/configuracao-custos.service.js';
 import { GastoIndiretoService } from '../../../gastos-indiretos/application/services/gasto-indireto.service.js';
 import { InsumoService } from '../../../insumos/application/services/insumo.service.js';
 import {
@@ -45,6 +46,7 @@ export class ReceitaService {
     private readonly repository: ReceitaRepository,
     private readonly insumoService: InsumoService,
     private readonly gastoIndiretoService: GastoIndiretoService,
+    private readonly configuracaoCustosService: ConfiguracaoCustosService,
   ) {}
 
   /** Da mais nova para a mais antiga (`dataCriacao`). */
@@ -200,12 +202,13 @@ export class ReceitaService {
     empresaId: number,
     lotes = 1,
   ): Promise<CustoReceita> {
-    const [encontrados, gastos] = await Promise.all([
+    const [encontrados, gastos, configuracao] = await Promise.all([
       this.insumoService.buscarVariosDaEmpresa(
         insumos.map((item) => item.insumo_id),
         empresaId,
       ),
       this.gastoIndiretoService.listarPorEmpresa(empresaId),
+      this.configuracaoCustosService.buscarDaEmpresa(empresaId),
     ]);
     const custoPorId = new Map(encontrados.map((i) => [i.id, i.custoUnitario]));
     return calcularCustoReceita({
@@ -217,6 +220,7 @@ export class ReceitaService {
       rendimento,
       margemLucro,
       gastos,
+      capacidadeMensal: configuracao.capacidadeMensal,
       lotes,
     });
   }

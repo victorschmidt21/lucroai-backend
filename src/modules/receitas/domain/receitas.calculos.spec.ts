@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { GastoParaRateio } from '../../gastos-indiretos/domain/gastos-indiretos.calculos.js';
+import type { GastoParaCusto } from '../../gastos-indiretos/domain/gastos-indiretos.calculos.js';
 import {
   calcularCustoInvisivel,
   calcularCustoItem,
@@ -27,12 +27,16 @@ const paoFrances = [
   { insumoId: 8, quantidade: 0.02, custoUnitario: custo.sal },
   { insumoId: 6, quantidade: 15, custoUnitario: custo.fermento },
 ];
-const gastosSeed: GastoParaRateio[] = [
-  { valor: 450, metodoRateio: 'PROPORCIONAL' },
-  { valor: 1800, metodoRateio: 'FIXO' },
-  { valor: 185, metodoRateio: 'PROPORCIONAL' },
-  { valor: 120, metodoRateio: 'POR_UNIDADE' },
+// Tipos de gasto da BE-26: energia, aluguel e gás são do mês; o saquinho é
+// por unidade; a comissão é fração do preço e não entra no custo.
+const gastosSeed: GastoParaCusto[] = [
+  { valor: 450, tipo: 'MENSAL' },
+  { valor: 1800, tipo: 'MENSAL' },
+  { valor: 185, tipo: 'MENSAL' },
+  { valor: 0.1, tipo: 'POR_UNIDADE' },
+  { valor: 0.12, tipo: 'PERCENTUAL_VENDA' },
 ];
+const CAPACIDADE = 100;
 
 describe('calcularCustoItem', () => {
   it('quantidade × custo unitário, sem arredondar (BE-23)', () => {
@@ -43,36 +47,50 @@ describe('calcularCustoItem', () => {
 });
 
 describe('calcularCustoInvisivel', () => {
-  it('soma o rateio de 1 lote dos três métodos', () => {
-    // FIXO 1800 + PROPORCIONAL (450 + 185) × 1 + POR_UNIDADE 120 × 50
-    expect(calcularCustoInvisivel(gastosSeed, 50)).toBe(8435);
+  it('1 lote: mensais ÷ capacidade + por unidade × rendimento', () => {
+    // (450 + 1800 + 185) ÷ 100 + 0.1 × 50
+    expect(calcularCustoInvisivel(gastosSeed, 50, CAPACIDADE)).toBeCloseTo(
+      29.35,
+      P,
+    );
   });
 
-  it('cada método isolado', () => {
+  it('gasto mensal de R$ 1.800 não entra inteiro num lote (BE-26)', () => {
     expect(
-      calcularCustoInvisivel([{ valor: 12.5, metodoRateio: 'FIXO' }], 40),
-    ).toBe(12.5);
+      calcularCustoInvisivel([{ valor: 1800, tipo: 'MENSAL' }], 50, 40),
+    ).toBe(45);
+  });
+
+  it('cada tipo isolado', () => {
+    expect(
+      calcularCustoInvisivel([{ valor: 12.5, tipo: 'MENSAL' }], 40, CAPACIDADE),
+    ).toBe(0.125);
     expect(
       calcularCustoInvisivel(
-        [{ valor: 12.5, metodoRateio: 'PROPORCIONAL' }],
-        40,
-      ),
-    ).toBe(12.5);
-    expect(
-      calcularCustoInvisivel(
-        [{ valor: 0.015, metodoRateio: 'POR_UNIDADE' }],
+        [{ valor: 0.015, tipo: 'POR_UNIDADE' }],
         101,
+        CAPACIDADE,
       ),
     ).toBeCloseTo(1.515, P);
+    expect(
+      calcularCustoInvisivel(
+        [{ valor: 0.12, tipo: 'PERCENTUAL_VENDA' }],
+        50,
+        CAPACIDADE,
+      ),
+    ).toBe(0);
   });
 
   it('sem gastos é 0', () => {
-    expect(calcularCustoInvisivel([], 12)).toBe(0);
+    expect(calcularCustoInvisivel([], 12, CAPACIDADE)).toBe(0);
   });
 
-  it('N lotes: FIXO uma vez, PROPORCIONAL × lotes, POR_UNIDADE × total de unidades', () => {
-    // 1800 + (450 + 185) × 3 + 120 × 150
-    expect(calcularCustoInvisivel(gastosSeed, 50, 3)).toBe(21705);
+  it('N lotes: mensais × lotes ÷ capacidade, por unidade × total de unidades', () => {
+    // 2435 × 3 ÷ 100 + 0.1 × 150
+    expect(calcularCustoInvisivel(gastosSeed, 50, CAPACIDADE, 3)).toBeCloseTo(
+      88.05,
+      P,
+    );
   });
 });
 
@@ -100,6 +118,7 @@ describe('calcularCustoReceita', () => {
         rendimento: 50,
         margemLucro: 0.6,
         gastos: [],
+        capacidadeMensal: CAPACIDADE,
       }),
     ).toEqual({
       itens: [
@@ -125,17 +144,18 @@ describe('calcularCustoReceita', () => {
     });
   });
 
-  it('Pão Francês com os gastos do seed soma o custo invisível (lacuna 18)', () => {
+  it('Pão Francês com os gastos do seed soma o custo invisível pelo tipo (BE-26)', () => {
     const r = calcularCustoReceita({
       itens: paoFrances,
       rendimento: 50,
       margemLucro: 0.6,
       gastos: gastosSeed,
+      capacidadeMensal: CAPACIDADE,
     });
-    expect(r.custoInvisivel).toBe(8435);
-    expect(r.custoProducao).toBeCloseTo(8438.305, P);
-    expect(r.custoUnitario).toBeCloseTo(168.7661, P);
-    expect(r.precoSugerido).toBeCloseTo(270.02576, P);
+    expect(r.custoInvisivel).toBeCloseTo(29.35, P);
+    expect(r.custoProducao).toBeCloseTo(32.655, P);
+    expect(r.custoUnitario).toBeCloseTo(0.6531, P);
+    expect(r.precoSugerido).toBeCloseTo(1.04496, P);
   });
 
   it('Bolo de Chocolate do seed com gastos', () => {
@@ -152,15 +172,17 @@ describe('calcularCustoReceita', () => {
       rendimento: 12,
       margemLucro: 0.5,
       gastos: gastosSeed,
+      capacidadeMensal: CAPACIDADE,
     });
     expect(r.itens.map((i) => i.custoCalculado)).toEqual(
       [0.75, 0.88, 2.4, 2.25, 1, 2.25, 0.17].map((v) => expect.closeTo(v, P)),
     );
     expect(r.custoIngredientes).toBeCloseTo(9.7, P);
-    expect(r.custoInvisivel).toBe(3875);
-    expect(r.custoProducao).toBeCloseTo(3884.7, P);
-    expect(r.custoUnitario).toBeCloseTo(323.725, P);
-    expect(r.precoSugerido).toBeCloseTo(485.5875, P);
+    // 2435 ÷ 100 + 0.1 × 12
+    expect(r.custoInvisivel).toBeCloseTo(25.55, P);
+    expect(r.custoProducao).toBeCloseTo(35.25, P);
+    expect(r.custoUnitario).toBeCloseTo(2.9375, P);
+    expect(r.precoSugerido).toBeCloseTo(4.40625, P);
   });
 
   it('sem margem não tem preço sugerido', () => {
@@ -169,6 +191,7 @@ describe('calcularCustoReceita', () => {
       rendimento: 50,
       margemLucro: null,
       gastos: [],
+      capacidadeMensal: CAPACIDADE,
     });
     expect(r.custoUnitario).toBeCloseTo(0.0661, P);
     expect(r.precoSugerido).toBeNull();
@@ -181,6 +204,7 @@ describe('calcularCustoReceita', () => {
         rendimento,
         margemLucro: null,
         gastos: [],
+        capacidadeMensal: CAPACIDADE,
       }),
     ).toThrow(
       expect.objectContaining({
@@ -200,6 +224,7 @@ describe('calcularCustoReceita para N lotes', () => {
       rendimento: 50,
       margemLucro: 0.6,
       gastos: gastosSeed,
+      capacidadeMensal: CAPACIDADE,
     });
     expect(r.lotes).toBe(1);
     expect(r.totalUnidades).toBe(50);
@@ -211,6 +236,7 @@ describe('calcularCustoReceita para N lotes', () => {
       rendimento: 50,
       margemLucro: 0.6,
       gastos: [],
+      capacidadeMensal: CAPACIDADE,
       lotes: 3,
     });
     // fermento: 45 × 0.017 = 0.765
@@ -242,14 +268,15 @@ describe('calcularCustoReceita para N lotes', () => {
       rendimento: 50,
       margemLucro: 0.6,
       gastos: gastosSeed,
+      capacidadeMensal: CAPACIDADE,
       lotes: 3,
     });
-    expect(r.custoInvisivel).toBe(21705);
-    expect(r.custoProducao).toBeCloseTo(21714.915, P);
-    expect(r.custoUnitario).toBeCloseTo(144.7661, P);
+    expect(r.custoInvisivel).toBeCloseTo(88.05, P);
+    expect(r.custoProducao).toBeCloseTo(97.965, P);
+    expect(r.custoUnitario).toBeCloseTo(0.6531, P);
   });
 
-  it('Bolo de Chocolate, 7 lotes, com gastos dos três métodos', () => {
+  it('Bolo de Chocolate, 7 lotes, com gastos dos três tipos', () => {
     const r = calcularCustoReceita({
       itens: [
         { insumoId: 1, quantidade: 0.25, custoUnitario: 15 / 5 },
@@ -263,10 +290,11 @@ describe('calcularCustoReceita para N lotes', () => {
       rendimento: 12,
       margemLucro: 0.5,
       gastos: [
-        { valor: 12.5, metodoRateio: 'FIXO' },
-        { valor: 0.015, metodoRateio: 'POR_UNIDADE' },
-        { valor: 3.3, metodoRateio: 'PROPORCIONAL' },
+        { valor: 12.5, tipo: 'MENSAL' },
+        { valor: 0.015, tipo: 'POR_UNIDADE' },
+        { valor: 0.12, tipo: 'PERCENTUAL_VENDA' },
       ],
+      capacidadeMensal: CAPACIDADE,
       lotes: 7,
     });
     expect(r.itens.map((i) => i.custoCalculado)).toEqual(
@@ -275,10 +303,10 @@ describe('calcularCustoReceita para N lotes', () => {
       ),
     );
     expect(r.totalUnidades).toBe(84);
-    // 12.5 + 0.015 × 84 + 3.3 × 7
-    expect(r.custoInvisivel).toBeCloseTo(36.86, P);
-    expect(r.custoProducao).toBeCloseTo(104.76, P);
-    expect(r.custoUnitario).toBeCloseTo(104.76 / 84, P);
+    // 12.5 × 7 ÷ 100 + 0.015 × 84 (a comissão não é custo)
+    expect(r.custoInvisivel).toBeCloseTo(2.135, P);
+    expect(r.custoProducao).toBeCloseTo(70.035, P);
+    expect(r.custoUnitario).toBeCloseTo(70.035 / 84, P);
   });
 });
 
@@ -415,6 +443,7 @@ describe('resolverMargem', () => {
       rendimento: 50,
       margemLucro: resolverMargem(null, 0.6),
       gastos: [],
+      capacidadeMensal: CAPACIDADE,
     });
     expect(r.precoSugerido).toBeNull();
   });

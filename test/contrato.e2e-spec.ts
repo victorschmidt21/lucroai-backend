@@ -234,11 +234,19 @@ describe('Contrato com o frontend (e2e)', () => {
         .expect(201);
       const gasto = validar(gastoIndiretoSchema, criado.body);
       gastoId = gasto.id;
-      expect(gasto.metodoRateio).toBe('PROPORCIONAL');
+      // BE-26: o metodo_rateio antigo vira tipo; a resposta mantém um
+      // metodoRateio válido para o schema e traz o tipo (campo aditivo).
+      expect(gasto.metodoRateio).toBe('FIXO');
+      expect(criado.body).toMatchObject({ tipo: 'MENSAL' });
 
       const outro = await comA('post', '/gastos-indiretos')
-        .send({ descricao: 'Temporário', valor: 1, metodo_rateio: 'FIXO' })
+        .send({
+          descricao: 'Temporário',
+          valor: 0.12,
+          tipo: 'PERCENTUAL_VENDA',
+        })
         .expect(201);
+      expect(outro.body).toMatchObject({ tipo: 'PERCENTUAL_VENDA' });
       const outroId = validar(gastoIndiretoSchema, outro.body).id;
 
       const lista = await comA('get', '/gastos-indiretos').expect(200);
