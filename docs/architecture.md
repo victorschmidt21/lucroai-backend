@@ -44,7 +44,7 @@ Cada tabela pertence a **um** módulo, e só ele lê e escreve nela pelo Prisma.
 | `configuracao-custos` | `ConfiguracaoCustos` | configuração de custos da empresa (base de rateio, capacidade mensal, lucro, imposto e maquininha), com os padrões e a validação (`validarConfiguracaoCustos`); exporta `ConfiguracaoCustosService` (`criarPadrao(empresaId, tx)` e `buscarDaEmpresa(empresaId, tx?)`) | — | BE-24, BE-26 |
 | `canais` | `CanalVenda` | canais de venda com comissão (Balcão, iFood…), CRUD em `/canais`, com os padrões (`CANAIS_PADRAO`) e a regra do Balcão (`garantirCanalExcluivel`); exporta `CanalVendaService` (`criarPadrao(empresaId, tx)`) | — | BE-25 |
 | `gastos-indiretos` | `GastoIndireto` | cadastro de gastos por tipo (`MENSAL`, `POR_UNIDADE`, `PERCENTUAL_VENDA`), validação por tipo (`validarGasto`) e a parte de cada gasto no custo (`calcularGastoNoCusto`); exporta `GastoIndiretoService` (`listarPorEmpresa` e `buscarVariosDaEmpresa`) | — | BE-08, BE-26 |
-| `receitas` | `Receita`, `ItemReceita` | receitas, custo para 1 ou N lotes (`calcularCustoReceita`), simulação (`simularCenario`) e preço de venda (`calcularPrecoVenda`), sem gravar; exporta `ReceitaService` (`buscarDaEmpresa`) | `insumos`, `gastos-indiretos`, `configuracao-custos` | BE-09, BE-10, BE-26 |
+| `receitas` | `Receita`, `ItemReceita` | receitas com a ficha técnica (`validarFichaTecnica`); custo para 1 ou N lotes (`calcularCustoReceita`), calculado na leitura e nunca gravado; simulação (`simularCenario`) e preço de venda (`calcularPrecoVenda`), sem gravar; exporta `ReceitaService` (`buscarDaEmpresa`, com o custo de 1 lote) | `insumos`, `gastos-indiretos`, `configuracao-custos` | BE-09, BE-10, BE-26, BE-27 |
 | `producoes` | `Producao`, `RateioProducao` | produção com rateio (`calcularProducao`), baixa de insumos e entrada de produto acabado, numa transação só; não exporta service | `receitas`, `gastos-indiretos`, `estoque`, `configuracao-custos` | BE-12, BE-26 |
 | `vendas` | `Venda`, `ItemVenda` | vendas com a entidade `Venda` (total, margem e transições de status) e conclusão com baixa de produto acabado (`saidaPorVenda`) na mesma transação; não exporta service | `receitas`, `estoque` | BE-13 |
 
@@ -203,7 +203,7 @@ export interface UsoDoGasto {
   lotes: number;
   totalUnidades: number;
   capacidadeMensal: number;
-  /** Até a ficha técnica ganhar o campo (BE-27), todo lote ocupa 1. */
+  /** Fornadas ou minutos de 1 lote: o `usoPorLote` da receita (BE-27); omitido, 1. */
   usoPorLote?: number;
 }
 

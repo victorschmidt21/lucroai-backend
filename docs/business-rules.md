@@ -15,14 +15,14 @@ Cada fórmula vira uma função pura em `src/modules/<modulo>/domain/<modulo>.ca
 | Custo por unidade-base do insumo | 6 | `round6` | `custoUnitario` e `precoUnitario` do insumo |
 | Custo unitário e preço | 4 | `round4` | `custoUnitario` e `precoSugerido` da receita, `custo_por_unidade`, `custo_total_unitario`, `preco_sugerido`, `lucro_por_unidade`, `custoUnitario` e `precoVenda` da simulação, `custoUnitario` da produção e do item de venda |
 | Totais em reais | 2 | `round2` | `custoCalculado` do item, `custoProducao`, `custo_invisivel`, `custo_total_producao`, `lucroEstimado`, `custoTotal` e `valorRateado` da produção, `total` da venda |
-| Frações (margens e percentuais) | 4 | `round4` | `margemProjetada` da simulação (eram 2 casas), `margemRealizada` da venda |
+| Frações (margens e percentuais) | 4 | `round4` | `margemProjetada` da simulação (eram 2 casas), `margemRealizada` da venda, `margemLucro` e `lucroPercentual` da receita (BE-27) |
 
 Exemplo (critério da BE-23): farinha 1 kg a R$ 3,00/kg, sal 0,02 kg a R$ 2,50/kg e fermento 15 g a R$ 0,017/g dão custo de ingredientes **R$ 3,305** (`custoIngredientes` de `calcularCustoReceita`), não R$ 3,31 da soma de itens arredondados. Com rendimento 50, o custo unitário é R$ 0,0661 (era R$ 0,07).
 
-- Valores digitados (`valorPago`, `valor` do gasto, `margem_lucro`, `preco_unitario_real`, quantidades) voltam como vieram.
+- Valores digitados (`valorPago`, `valor` do gasto, `preco_unitario_real`, quantidades, `usoPorLote`, `embalagemPorUnidade` e `perdaPercentual` da receita) voltam como vieram.
 - Quantidades de estoque e saldos continuam com `round6` ao gravar (não são custo nem preço).
 - O break-even da simulação é `Math.ceil` de `round6(custo × volume / preço)`: o `round6` só tira o ruído do ponto flutuante (`0.1 × 3 / 0.1` dá `3.0000000000000004`, e o teto daria 4).
-- Os services exportados para outros módulos devolvem os valores **sem arredondar**, não o DTO de resposta: `InsumoService.buscarVariosDaEmpresa` devolve os insumos e `ReceitaService.buscarDaEmpresa`, a receita com os itens, como estão no banco.
+- Os services exportados para outros módulos devolvem os valores **sem arredondar**, não o DTO de resposta: `InsumoService.buscarVariosDaEmpresa` devolve os insumos como estão no banco e `ReceitaService.buscarDaEmpresa`, a receita com os itens e o custo de 1 lote calculado na leitura (BE-27).
 - Cálculo em `number` (`double`), sem biblioteca de decimal: com ~15 dígitos significativos, o erro do ponto flutuante fica muito abaixo das 4 ou 6 casas da resposta, e o arredondamento o elimina.
 
 As três funções ficam em `src/shared/domain/arredondamento.ts`, com teste unitário. **Muda (BE-23):** arredondam meio para cima, longe do zero, e passam o valor escalado por `toPrecision(15)` antes do `Math.round`, para o ruído do ponto flutuante não derrubar o meio (`round2(1.005)` dá `1.01`, e `round2(3 + 0.05 + 0.255)` dá `3.31`). O `Number(v.toFixed(n))` dos microsserviços dava `1` e `3.3`. Não troque por `toFixed` nem por `Math.round(v * 100) / 100`.
@@ -120,7 +120,7 @@ Origem do cadastro: `catalog-service/src/modules/gastos-indiretos/` (`create-gas
 | `POR_UNIDADE` | reais por unidade vendida que não é da ficha | saco de pão genérico, etiqueta | `valor × totalUnidades` |
 | `PERCENTUAL_VENDA` | fração do preço (0 a menos de 1) | comissão de revendedora | 0: não é custo; entra nos percentuais do preço (BE-28) |
 
-- `capacidadeMensal` vem da [configuração de custos](#configuração-de-custos). `usoPorLote` é o uso de forno do lote (fornadas ou minutos), que a ficha técnica ganha na BE-27; até lá, **todo lote ocupa 1**. Com isso, um gasto mensal de R$ 1.800 e a capacidade padrão de 40 fornadas custam R$ 45 por lote, nunca R$ 1.800.
+- `capacidadeMensal` vem da [configuração de custos](#configuração-de-custos). `usoPorLote` é o uso de forno do lote (fornadas ou minutos), da [ficha técnica](#ficha-técnica) da receita (BE-27; padrão 1). Com isso, um gasto mensal de R$ 1.800 e a capacidade padrão de 40 fornadas custam R$ 45 por lote, nunca R$ 1.800.
 - `totalUnidades = lotes × rendimento`. O `POR_UNIDADE` sempre foi valor por unidade; o seed antigo é que gravava R$ 120 de embalagem como se fosse o total do mês.
 - Sem arredondamento (BE-23): a parte do gasto entra no custo da receita e da produção sem arredondar.
 - Funções puras em `gastos-indiretos/domain/gastos-indiretos.calculos.ts`: `calcularGastoNoCusto(gasto, { lotes, totalUnidades, capacidadeMensal, usoPorLote? })`, usada pelas receitas e pelas produções; `validarGasto`; e a compatibilidade com o `metodo_rateio` (`tipoDoMetodoRateio`, `metodoRateioDoTipo`, `resolverTipoGasto`).
@@ -145,47 +145,67 @@ Cadastro:
 
 Origem: `recipe-service/src/modules/custos/application/services/custo.service.ts` (`calcularReceita`, `calcularItens`, `calcularCustoTotalProducao`, `calcularCustoPorUnidade`, `calcularPrecoSugerido`) e `default-custo-invisivel-result.provider.ts`.
 
-Para `lotes` lotes (o cadastro e a edição usam `lotes = 1`):
+**Muda (BE-27): o custo não é mais gravado.** A receita guarda só a ficha técnica; `custoProducao`, `custoUnitario`, `precoSugerido` e o `custoCalculado` dos itens são calculados **na leitura** (listagem, detalhe, cadastro, edição, custo, simulação, preço de venda e `buscarDaEmpresa`), com os custos atuais dos insumos, os gastos atuais e a configuração de custos da empresa. Mudar o custo de um insumo ou um gasto passa a mudar o custo das receitas na hora. A fórmula abaixo é a de hoje; a nova (embalagem, perda e preço por canal) é da BE-28.
+
+Para `lotes` lotes (as respostas de receita usam `lotes = 1`):
 
 ```
 quantidadeItem    = item.quantidade × lotes
 custoCalculado    = quantidadeItem × insumo.custoUnitario                // por item
 custoIngredientes = Σ custoCalculado
 totalUnidades     = rendimento × lotes
-custoInvisivel    = Σ calcularGastoNoCusto(gasto, { lotes, totalUnidades, capacidadeMensal })  // TODOS os gastos, pelo tipo (BE-26)
+custoInvisivel    = Σ calcularGastoNoCusto(gasto, { lotes, totalUnidades, capacidadeMensal, usoPorLote })  // TODOS os gastos, pelo tipo (BE-26)
 custoProducao     = custoIngredientes + custoInvisivel
 custoUnitario     = custoProducao / totalUnidades                       // rendimento ≤ 0 → 400
-precoSugerido     = custoUnitario × (1 + margem)                        // só se margem != null
+lucro             = receita.lucroPercentual ?? configuracao.lucroPadrao  // fração do PREÇO (BE-27)
+precoSugerido     = custoUnitario ÷ (1 − lucro)                         // sem preço se lucro ≥ 1
 ```
 
-**Muda (BE-23):** hoje cada linha arredonda com `round2`; o monolito não arredonda no meio e grava os valores exatos. A resposta arredonda (`custoCalculado`, `custoProducao` e `custo_invisivel` com 2 casas; `custoUnitario` e `precoSugerido` com 4), ver [Arredondamento](#arredondamento).
+**Muda (BE-23):** hoje cada linha arredonda com `round2`; o monolito não arredonda no meio. A resposta arredonda (`custoCalculado`, `custoProducao` e `custo_invisivel` com 2 casas; `custoUnitario` e `precoSugerido` com 4), ver [Arredondamento](#arredondamento).
 
-- **Custo invisível (lacuna 18):** soma **todos** os gastos indiretos da empresa. **Muda (BE-26):** cada gasto entra pelo [tipo](#gastos-indiretos-e-rateio): o mensal dividido pela capacidade mensal (1 fornada por lote até a BE-27), o por unidade multiplicado pelas unidades e o percentual de venda fora do custo. Antes, o Aluguel de R$ 1.800 `FIXO` subia R$ 1.800 o custo de cada receita; agora sobe R$ 45 com a capacidade padrão de 40. A fórmula nova de custo e preço por canal é da BE-28.
+- **Custo invisível (lacuna 18):** soma **todos** os gastos indiretos da empresa. **Muda (BE-26):** cada gasto entra pelo [tipo](#gastos-indiretos-e-rateio): o mensal dividido pela capacidade mensal e multiplicado pelo `usoPorLote` (BE-27), o por unidade multiplicado pelas unidades e o percentual de venda fora do custo. Antes, o Aluguel de R$ 1.800 `FIXO` subia R$ 1.800 o custo de cada receita; agora sobe R$ 45 com a capacidade padrão de 40. A fórmula nova de custo e preço por canal é da BE-28.
 - O resultado do custo invisível precisa ser finito e ≥ 0, senão 400 (`obterCustoInvisivel`). Com valores ≥ 0 validados no cadastro, isso não acontece, e o monolito não repete a conferência.
 - Rendimento ≤ 0 → 400 `RENDIMENTO_INVALIDO` "Rendimento da receita deve ser maior que zero" (`validarRendimento`). O DTO já exige inteiro positivo.
-- Funções puras em `receitas/domain/receitas.calculos.ts`: `calcularCustoItem`, `calcularCustoInvisivel(gastos, rendimento, capacidadeMensal, lotes = 1)` (usa `calcularGastoNoCusto` de `gastos-indiretos`), `calcularPrecoSugerido`, `calcularCustoReceita` (`lotes` opcional, 1 por padrão; devolve também `lotes` e `totalUnidades`), `resolverMargem` e `precisaRecalcular` (BE-09); `simularCenario` e `calcularPrecoVenda` (BE-10). O service busca os insumos por `InsumoService.buscarVariosDaEmpresa`, os gastos por `GastoIndiretoService.listarPorEmpresa` e a capacidade mensal por `ConfiguracaoCustosService.buscarDaEmpresa` (BE-26), sem HTTP.
-- Margem é **fração** (`0.6` = 60%), `≥ 0`.
-- O item guarda `custoCalculado` para 1 lote. A receita guarda `custoProducao`, `custoUnitario`, `margemLucro` e `precoSugerido`; sem valor, esses campos são **omitidos** na resposta.
+- Funções puras em `receitas/domain/receitas.calculos.ts`: `calcularCustoItem`, `calcularCustoInvisivel(gastos, rendimento, capacidadeMensal, lotes = 1, usoPorLote = 1)` (usa `calcularGastoNoCusto` de `gastos-indiretos`), `calcularPrecoSugerido(custoUnitario, lucro)`, `calcularCustoReceita` (`lotes` e `usoPorLote` opcionais, 1 por padrão; devolve também `lotes` e `totalUnidades`); `simularCenario` e `calcularPrecoVenda` (BE-10); e as da [ficha técnica](#ficha-técnica) (BE-27). O service busca os insumos por `InsumoService.buscarVariosDaEmpresa`, os gastos por `GastoIndiretoService.listarPorEmpresa` e a configuração por `ConfiguracaoCustosService.buscarDaEmpresa`, uma vez por requisição (também na listagem), sem HTTP.
+- **Muda (BE-27):** `precoSugerido` usa o lucro sobre o preço da receita ou, sem ele, o `lucroPadrao` da empresa; por isso toda receita tem preço sugerido (menos com lucro padrão de 100%). A resposta traz ainda `margemLucro` derivada (`lucro ÷ (1 − lucro)`, o markup equivalente), para o frontend atual; ela é omitida só quando não há preço.
 - Validação do corpo (`create-receita.dto.ts`): nome até 80, `rendimento` inteiro > 0, `quantidade` do item ≥ 0.001, `insumo_id` inteiro > 0. **Muda (BE-09):** a lista de insumos não pode ser vazia (400), os insumos precisam ser da empresa (404 `INSUMO_NAO_ENCONTRADO`), e o nome passa a ser aparado e obrigatório (como o do insumo e o do gasto).
 - Receita inexistente ou de outra empresa → 404 `RECEITA_NAO_ENCONTRADA` "Receita não encontrada". Listagem por `dataCriacao` decrescente (e `id` no empate); itens na ordem em que foram informados.
-- Para outros módulos, `ReceitaService` exporta `buscarDaEmpresa(id, empresaId, tx?)`, que devolve a `Receita` com os itens (404 se não for da empresa), para as BE-12 e BE-13. São os valores do banco, sem arredondar (BE-23), e não o `ReceitaDto`.
+- Para outros módulos, `ReceitaService` exporta `buscarDaEmpresa(id, empresaId, tx?)`, que devolve a `Receita` com os itens e, desde a BE-27, `custoProducao` e `custoUnitario` de 1 lote calculados agora (404 se não for da empresa), para as BE-12 e BE-13. Valores sem arredondar (BE-23), não o `ReceitaDto`. Dentro de uma transação, as consultas do custo usam o `tx`.
+
+### Ficha técnica
+
+**Novo (BE-27).** Campos da receita além dos itens e do rendimento, todos opcionais na entrada (`snake_case`, como o resto do corpo) e com padrão, para o formulário atual continuar funcionando:
+
+| Campo (corpo / resposta) | O que é | Padrão | Validação |
+| --- | --- | --- | --- |
+| `uso_por_lote` / `usoPorLote` | fornadas ou minutos de forno que 1 lote ocupa, conforme a `baseRateio` da empresa | 1 | > 0 |
+| `embalagem_por_unidade` / `embalagemPorUnidade` | reais por unidade (caixa, pote ou saquinho do próprio produto) | 0 | ≥ 0 |
+| `perda_percentual` / `perdaPercentual` | fração das unidades que não são vendidas (sobra, queima) | 0 | 0 ≤ perda < 1 |
+| `lucro_percentual` / `lucroPercentual` | lucro como fração do **preço** | vazio: usa o `lucroPadrao` da empresa | 0 ≤ lucro < 1 |
+
+- `rendimento` passa a ser **unidades boas** por lote (as vendáveis).
+- **Removidos (BE-27):** a coluna `margem_lucro` (markup sobre o custo) e as de custo congelado (`custo_producao`, `custo_unitario`, `preco_sugerido` da receita e `custo_calculado` do item). Sem migração de dados (não há dados reais): a migration `altera_ficha_tecnica_da_receita` apaga as colunas.
+- `usoPorLote` já entra no custo (gastos `MENSAL`) da receita e da produção. `embalagemPorUnidade` e `perdaPercentual` são gravados e devolvidos, mas só entram no custo com a fórmula nova da BE-28.
+- Perda ou lucro ≥ 1 não deixam preço possível (divisão por zero) → 400 `DADOS_INVALIDOS`, com `details` no campo do corpo (`perda_percentual`, `lucro_percentual`). O DTO confere o tipo e o mínimo; o limite superior, e o `PUT` mesclado com o salvo, são conferidos por `validarFichaTecnica`.
+- Na resposta, `lucroPercentual` é omitido quando a receita usa o lucro padrão (como os outros campos sem valor da receita) e sai com 4 casas.
+- **Compatibilidade com o frontend atual:** o formulário ainda envia `margem_lucro` (markup). Ela é aceita e convertida em `lucro_percentual = margem ÷ (1 + margem)`, o que dá o mesmo preço sugerido (`custo × (1 + margem) = custo ÷ (1 − lucro)`); se vierem os dois, vale o `lucro_percentual`. `margem_lucro: null` volta ao lucro padrão. O legado sai quando o frontend passar a usar o lucro (BE-33).
+- Funções puras: `FICHA_TECNICA_PADRAO`, `resolverFichaTecnica(informada, salva?)` (omitido ou `null` mantém o salvo, menos `lucroPercentual`, em que `null` volta ao padrão), `validarFichaTecnica`, `lucroDaMargem`, `margemDoLucro` e `lucroPercentualInformado`.
 
 ### Edição
 
 Origem: `recipe-service/src/modules/receitas/application/services/receita.service.ts` (`update`).
 
-- Campo omitido mantém o valor salvo (`null` em `nome`, `rendimento`, `unidadeRendimento` ou `insumos` também mantém; só `margem_lucro` trata `null` como valor).
+- Campo omitido mantém o valor salvo (`null` em `nome`, `rendimento`, `unidadeRendimento`, `insumos` e nos campos da ficha técnica também mantém; só `lucro_percentual` e `margem_lucro` tratam `null` como valor).
 - Com `insumos`, todos os itens são trocados pelos novos, no mesmo update (atômico).
-- O custo só é recalculado se vierem `insumos`, `rendimento` ou `margem_lucro` (inclusive `null`). O recálculo usa os custos atuais dos insumos e os gastos atuais da empresa, inclusive para os itens já salvos. Mudar só `nome` ou `unidadeRendimento` mantém os custos salvos.
-- **Muda (BE-09, lacuna 21):** `margem_lucro: null` remove a margem **e** o preço sugerido.
-- Mudar o custo de um insumo **não** recalcula as receitas que o usam: o custo é recalculado quando a receita é salva de novo (comportamento atual, mantido).
+- **Muda (BE-27):** não há mais recálculo na edição, porque nada de custo é gravado; a resposta traz o custo atual. `lucro_percentual: null` (ou `margem_lucro: null`) volta ao lucro padrão da empresa. A BE-09 fazia `margem_lucro: null` remover a margem e o preço sugerido (lacuna 21).
+- **Muda (BE-27):** mudar o custo de um insumo ou um gasto muda na hora o custo das receitas que o usam. Hoje o custo só mudava quando a receita era salva de novo.
 - **Muda (BE-09):** excluir receita usada em produção ou venda → 409 `RECEITA_EM_USO` "Receita usada em produções ou vendas não pode ser excluída" (P2003 das FKs `RESTRICT` de `producao` e `item_venda`, traduzido no `ReceitaRepository`). Os itens e o estoque de produto acabado vão junto (`CASCADE`).
 
 ### Custo para N lotes
 
 Origem: `custo.service.ts` (`calcularPorReceita`, `simularPorReceita`) e `custos/application/dto/receita-custo.dto.ts`.
 
-`GET /receitas/:id/custo` (1 lote) e `POST /receitas/:id/custo/simular` (`quantidadeLotes`, inteiro > 0) **recalculam** com os custos atuais dos insumos e os gastos atuais da empresa, pela fórmula acima. Não usam os valores salvos. A resposta é `snake_case` (lacuna 15, mantida):
+`GET /receitas/:id/custo` (1 lote) e `POST /receitas/:id/custo/simular` (`quantidadeLotes`, inteiro > 0) calculam com os custos atuais dos insumos e os gastos atuais da empresa, pela fórmula acima (como toda leitura de receita desde a BE-27). A resposta é `snake_case` (lacuna 15, mantida):
 
 | Campo | Valor |
 | --- | --- |
@@ -204,8 +224,8 @@ Origem: `custo.service.ts` (`calcularPorReceita`, `simularPorReceita`) e `custos
 Origem: `recipe-service/src/modules/custos/application/services/simulacao.service.ts` e `simular-cenario.dto.ts`.
 
 ```
-custo        = novoCusto ?? receita.custoUnitario        // salvo; ausente → 400
-preco        = novoPreco ?? receita.precoSugerido        // salvo; ausente → 400
+custo        = novoCusto ?? receita.custoUnitario        // calculado na leitura (BE-27)
+preco        = novoPreco ?? receita.precoSugerido        // calculado na leitura; ausente → 400
 volume       = volume ?? receita.rendimento
 margemUnit   = preco − custo
 lucroEstimado   = margemUnit × volume
@@ -216,7 +236,7 @@ resposta     = { custoUnitario: round4(custo), precoVenda: round4(preco), volume
 
 - Mensagens atuais (400): "Receita sem custo calculado. Informe novoCusto para simular." (`RECEITA_SEM_CUSTO`) e "Receita sem preço sugerido definido. Informe novoPreco para simular." (`RECEITA_SEM_PRECO`).
 - `novoCusto` e `novoPreco` > 0 e `volume` inteiro > 0, quando informados.
-- **Muda (BE-10, lacuna 27):** preço igual a 0 (só acontece com o `precoSugerido` salvo igual a 0) → 400 `PRECO_INVALIDO` "Preço de venda deve ser maior que zero. Informe novoPreco para simular.", em vez de devolver `NaN`.
+- **Muda (BE-10, lacuna 27):** preço igual a 0 (só acontece com o `precoSugerido` igual a 0, de uma receita sem custo) → 400 `PRECO_INVALIDO` "Preço de venda deve ser maior que zero. Informe novoPreco para simular.", em vez de devolver `NaN`.
 - **Muda (BE-23):** custo e preço com 4 casas (eram 2) e `margemProjetada` com 4 casas (eram 2); o arredondamento fica no `toSimulacaoCenarioDto`.
 - Função pura `simularCenario(entrada, receita)`, sem arredondar; não grava nada. Responde 201.
 
@@ -225,13 +245,13 @@ resposta     = { custoUnitario: round4(custo), precoVenda: round4(preco), volume
 Origem: `receita.service.ts` (`calcularPrecoVenda`) e `receitas/application/dto/preco-venda.dto.ts`.
 
 ```
-custo                = receita.custoUnitario      // salvo; ausente → 400 RECEITA_SEM_CUSTO "Receita sem custo calculado"
+custo                = receita.custoUnitario      // calculado na leitura (BE-27)
 preco_sugerido       = custo × (1 + margem_lucro)
 lucro_por_unidade    = preco_sugerido − custo
 custo_total_unitario = custo                      // os três com round4 na resposta (BE-23)
 ```
 
-- `margem_lucro ≥ 0`. Não grava nada na receita.
+- `margem_lucro ≥ 0` continua sendo markup sobre o custo nesta rota (contrato do frontend); a BE-28 traz o preço por canal. Não grava nada na receita. Com o custo calculado na leitura, o 400 `RECEITA_SEM_CUSTO` não acontece mais.
 - **Muda (BE-10, lacuna 20):** hoje não há arredondamento (`72.11200000000001`). **Muda (BE-23):** o cálculo não arredonda, e a resposta mostra os três campos com 4 casas (`72.112`); a BE-10 aplicava `round2` no meio da conta.
 - Função pura `calcularPrecoVenda(custoUnitario, margem)`. Responde 201.
 
@@ -262,9 +282,9 @@ Origem: `operations-service/src/modules/producoes/application/services/producao.
 gastos          = gasto_indireto_ids omitido → todos os gastos da empresa
                   gasto_indireto_ids = []    → nenhum gasto
 totalUnidades   = quantidade × receita.rendimento
-custoBase       = receita.custoProducao × quantidade        // custo SALVO da receita (0 se ausente), sem arredondar
+custoBase       = receita.custoProducao × quantidade        // custo de 1 lote calculado na hora (BE-27), sem arredondar
 rateios         = gastos sem PERCENTUAL_VENDA
-                    .map(g => calcularGastoNoCusto(g, { lotes: quantidade, totalUnidades, capacidadeMensal }))
+                    .map(g => calcularGastoNoCusto(g, { lotes: quantidade, totalUnidades, capacidadeMensal, usoPorLote: receita.usoPorLote }))
 custoTotal      = custoBase + Σ rateios
 custoUnitario   = totalUnidades > 0 ? custoTotal / totalUnidades : 0
 ```
@@ -272,12 +292,12 @@ custoUnitario   = totalUnidades > 0 ? custoTotal / totalUnidades : 0
 **Muda (BE-23):** sem o `round2` de hoje; a produção grava os valores exatos e a resposta mostra `custoTotal` e `valorRateado` com 2 casas e `custoUnitario` com 4.
 
 - `quantidade` é o número de **lotes** (inteiro > 0).
-- O `custoProducao` salvo da receita já contém o custo invisível de 1 lote com todos os gastos (lacuna 18). Por isso os gastos rateados na produção entram **de novo** no `custoTotal`. É o comportamento atual e fica mantido até a BE-30, que tira a duplicidade.
+- O `custoProducao` da receita já contém o custo invisível de 1 lote com todos os gastos (lacuna 18). Por isso os gastos rateados na produção entram **de novo** no `custoTotal`. É o comportamento atual e fica mantido até a BE-30, que tira a duplicidade.
 - **Muda (BE-26):** cada gasto é rateado pelo tipo, com a `capacidadeMensal` da configuração de custos da empresa (buscada na mesma transação): o mensal não entra mais inteiro. `PERCENTUAL_VENDA` é fração do preço, não custo, e não gera rateio.
 - Efeitos, **numa transação só** no monolito (BE-12): grava a produção e os rateios, dá baixa nos insumos (seção anterior) e dá entrada de `totalUnidades` no estoque de produto acabado da receita. Hoje são chamadas HTTP e eventos sem compensação.
 - **Muda (BE-12):** a receita e os gastos precisam ser da empresa do token (lacuna 11); a produção grava `totalUnidades` (lacuna 23) e a descrição do gasto em cada rateio.
 - **Muda (BE-12):** id repetido em `gasto_indireto_ids` conta uma vez (`buscarVariosDaEmpresa`); hoje cada repetição soma o rateio de novo.
-- Função pura `calcularProducao(receita, lotes, gastos, capacidadeMensal)` em `producoes/domain/producoes.calculos.ts`, com o `calcularGastoNoCusto` da BE-26. Os rateios saem na ordem dos gastos (com o id omitido, a de `GET /gastos-indiretos`: id decrescente).
+- Função pura `calcularProducao(receita, lotes, gastos, capacidadeMensal)` em `producoes/domain/producoes.calculos.ts`, com o `calcularGastoNoCusto` da BE-26 e o `usoPorLote` da receita (BE-27). Os rateios saem na ordem dos gastos (com o id omitido, a de `GET /gastos-indiretos`: id decrescente).
 - Uma falha em qualquer passo (ex.: insumo sem registro de estoque → 404) desfaz tudo: produção, rateios, baixas e entrada de produto acabado.
 
 ## Estoque de produto acabado
@@ -300,7 +320,7 @@ saída por venda:      se saldo < quantidade → erro "Estoque insuficiente..."
 Origem: `sales-service/src/modules/vendas/application/services/venda.service.ts` (`create`, `atualizarStatus`) e `create-venda.dto.ts`.
 
 ```
-custoUnitario    = receita.custoUnitario                        // snapshot do valor SALVO na hora da venda
+custoUnitario    = receita.custoUnitario                        // snapshot do custo calculado na hora da venda (BE-27)
 margemRealizada  = custoUnitario != null ? (preco − custoUnitario) / preco : null
 total            = Σ quantidade × preco
 status inicial   = PENDENTE
@@ -309,7 +329,7 @@ status inicial   = PENDENTE
 **Muda (BE-23):** a venda grava os valores exatos (inclusive o `custoUnitario` exato da receita); a resposta mostra `total` com 2 casas e `custoUnitario` e `margemRealizada` com 4.
 
 - Item: `receita_id` inteiro > 0, `quantidade` inteiro > 0, `preco_unitario_real` > 0 com até 2 casas.
-- Receita sem `custoUnitario` salvo → `custoUnitario` e `margemRealizada` do item ficam `null` (a venda é registrada mesmo assim). A margem pode ser negativa (preço abaixo do custo).
+- Receita sem `custoUnitario` → `custoUnitario` e `margemRealizada` do item ficam `null` (a venda é registrada mesmo assim). Desde a BE-27 o custo é sempre calculado, então isso só acontece com vendas antigas. A margem pode ser negativa (preço abaixo do custo).
 - Transições: só `PENDENTE` muda, para `CONCLUIDA` ou `CANCELADA`. Venda `CONCLUIDA` ou `CANCELADA` → 422 `VENDA_FINALIZADA` "Venda já finalizada não pode ser alterada". **Muda (BE-13):** o status passa de 400 para 422, e `PENDENTE` → `PENDENTE` (hoje aceito sem efeito) dá 422 `TRANSICAO_INVALIDA` "Venda pendente só pode ser concluída ou cancelada".
 - O registro não confere o estoque (lacuna 24, mantida): a barreira é a conclusão.
 - **Muda (BE-13):** concluir dá baixa de cada item no produto acabado **na mesma transação** da mudança de status. Sem saldo → 422 "Estoque insuficiente..." e a venda continua `PENDENTE` (lacuna 9). Hoje a baixa é assíncrona e a venda fica `CONCLUIDA` mesmo sem saldo.
@@ -341,10 +361,10 @@ A lista numerada está em [`lucroai-frontend/docs/api-integration.md#lacunas-do-
 | 15 | `ReceitaCusto` em `snake_case` | mantida | BE-10 | é o contrato do frontend |
 | 16 | links HATEOAS incorretos | corrigida | BE-04 | sem envelope: a resposta é o JSON do recurso |
 | 17 | seeds com `EMPRESA_ID = 1` fixo | corrigida | BE-14 | um seed só, pelos ids reais |
-| 18 | custo invisível soma todos os gastos da empresa | corrigida em parte | BE-09, BE-26 | continua somando todos os gastos (é a regra do cálculo novo), mas pelo tipo: o gasto mensal é dividido pela capacidade mensal e não entra mais inteiro em cada lote (BE-26); a duplicidade na produção sai na BE-30. O seed grava com a mesma regra, então seed e API batem |
+| 18 | custo invisível soma todos os gastos da empresa | corrigida em parte | BE-09, BE-26, BE-27 | continua somando todos os gastos (é a regra do cálculo novo), mas pelo tipo: o gasto mensal é dividido pela capacidade mensal (vezes o uso de forno da receita, BE-27) e não entra mais inteiro em cada lote (BE-26); a duplicidade na produção sai na BE-30. O seed grava com a mesma regra, então seed e API batem |
 | 19 | `GET /estoque/insumos/:id` de insumo inexistente → 404 | mantida | BE-11 | é o comportamento certo (inexistente ou de outra empresa) |
 | 20 | preço de venda sem arredondamento | corrigida | BE-10, BE-23 | 4 casas na resposta (`round4`); a BE-10 usava `round2` |
-| 21 | `PUT /receitas/:id` não remove a margem | corrigida | BE-09 | `margem_lucro: null` limpa margem e preço sugerido |
+| 21 | `PUT /receitas/:id` não remove a margem | corrigida | BE-09, BE-27 | a BE-09 fazia `margem_lucro: null` limpar margem e preço sugerido; desde a BE-27 a margem não é gravada, e `null` volta ao lucro padrão da empresa |
 | 22 | entrada de estoque sem `observacao` | corrigida | BE-05, BE-11 | campo opcional gravado na movimentação |
 | 23 | produção sem total de unidades | corrigida | BE-05, BE-12 | `totalUnidades` gravado |
 | 24 | `POST /vendas` não confere estoque | mantida | BE-13 | a barreira é a conclusão, como hoje |
