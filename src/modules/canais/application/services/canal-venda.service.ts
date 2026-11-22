@@ -70,14 +70,30 @@ export class CanalVendaService {
     return this.repository.listAtivosByEmpresa(empresaId, tx);
   }
 
+  /**
+   * Para as vendas (BE-30): o canal informado, ativo ou não, ou o Balcão
+   * quando omitido. Canal de outra empresa → 404.
+   */
+  async buscarParaVenda(
+    canalId: number | undefined,
+    empresaId: number,
+  ): Promise<CanalVenda> {
+    if (canalId !== undefined) return this.getOrFail(canalId, empresaId);
+    const balcao = await this.repository.findBalcaoByEmpresa(empresaId);
+    if (!balcao) throw canalNaoEncontrado();
+    return balcao;
+  }
+
   private async getOrFail(id: number, empresaId: number): Promise<CanalVenda> {
     const row = await this.repository.findByIdAndEmpresa(id, empresaId);
-    if (!row) {
-      throw new NotFoundError(
-        'CANAL_VENDA_NAO_ENCONTRADO',
-        'Canal de venda não encontrado',
-      );
-    }
+    if (!row) throw canalNaoEncontrado();
     return row;
   }
+}
+
+function canalNaoEncontrado(): NotFoundError {
+  return new NotFoundError(
+    'CANAL_VENDA_NAO_ENCONTRADO',
+    'Canal de venda não encontrado',
+  );
 }

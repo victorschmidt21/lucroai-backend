@@ -32,6 +32,14 @@ export class CanalVendaRepository {
     return this.prisma.canalVenda.findFirst({ where: { id, empresaId } });
   }
 
+  /** O Balcão da empresa (o primeiro, se houver mais de um). */
+  findBalcaoByEmpresa(empresaId: number): Promise<CanalVenda | null> {
+    return this.prisma.canalVenda.findFirst({
+      where: { empresaId, balcao: true },
+      orderBy: { id: 'asc' },
+    });
+  }
+
   create(empresaId: number, data: CanalVendaValores): Promise<CanalVenda> {
     return this.prisma.canalVenda.create({ data: { ...data, empresaId } });
   }
