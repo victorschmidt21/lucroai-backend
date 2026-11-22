@@ -6,10 +6,10 @@ import {
 export interface ReceitaParaProducao {
   rendimento: number;
   /**
-   * Custo de 1 lote calculado na leitura da receita (BE-27), que já inclui o
-   * custo invisível (lacuna 18).
+   * Custo dos ingredientes de 1 lote ao **custo médio** dos insumos (BE-30),
+   * sem os gastos.
    */
-  custoProducao?: number | null;
+  ingredientesLote: number;
   /** Fornadas ou minutos de forno de 1 lote (BE-27); 1 se omitido. */
   usoPorLote?: number;
 }
@@ -33,15 +33,15 @@ export interface CalculoProducao {
 }
 
 /**
- * Custo de uma produção de `lotes` lotes, com o rateio dos `gastos`. **Muda
- * (BE-26):** cada gasto entra pelo tipo (`calcularGastoNoCusto`), o mensal
- * dividido pela `capacidadeMensal`; `PERCENTUAL_VENDA` não é custo e não gera
- * rateio.
- * O custo da receita já tem o custo invisível com todos os gastos, e o
- * rateio soma os gastos de novo: é o comportamento atual, mantido até a
- * BE-30 (docs/business-rules.md#produções).
- * Origem: producao.service.ts (create) do operations-service. Sem
- * arredondamento (BE-23): o `ProducaoDto` arredonda a resposta.
+ * Custo de uma produção de `lotes` lotes. **Muda (BE-30):** é o consumo dos
+ * insumos ao custo médio mais os gastos `MENSAL` pelo uso de forno
+ * (`valor × usoPorLote × lotes ÷ capacidadeMensal`), cada um **uma vez**.
+ * Antes, o custo da receita (que já tinha todos os gastos) era multiplicado
+ * pelos lotes e os gastos eram rateados de novo por cima.
+ * `POR_UNIDADE`, embalagem e perda são custos da unidade vendida e ficam no
+ * custo da receita e da venda; `PERCENTUAL_VENDA` é fração do preço. Nenhum
+ * deles gera rateio na produção.
+ * Sem arredondamento (BE-23): o `ProducaoDto` arredonda a resposta.
  */
 export function calcularProducao(
   receita: ReceitaParaProducao,
@@ -50,7 +50,7 @@ export function calcularProducao(
   capacidadeMensal: number,
 ): CalculoProducao {
   const totalUnidades = lotes * receita.rendimento;
-  const custoBase = (receita.custoProducao ?? 0) * lotes;
+  const custoIngredientes = receita.ingredientesLote * lotes;
   const uso = {
     lotes,
     totalUnidades,
@@ -58,14 +58,14 @@ export function calcularProducao(
     usoPorLote: receita.usoPorLote,
   };
   const rateios = gastos
-    .filter((gasto) => gasto.tipo !== 'PERCENTUAL_VENDA')
+    .filter((gasto) => gasto.tipo === 'MENSAL')
     .map((gasto) => ({
       gastoIndiretoId: gasto.id,
       descricao: gasto.descricao,
       valorRateado: calcularGastoNoCusto(gasto, uso),
     }));
   const totalRateio = rateios.reduce((acc, r) => acc + r.valorRateado, 0);
-  const custoTotal = custoBase + totalRateio;
+  const custoTotal = custoIngredientes + totalRateio;
   const custoUnitario = totalUnidades > 0 ? custoTotal / totalUnidades : 0;
   return { totalUnidades, custoTotal, custoUnitario, rateios };
 }

@@ -6,6 +6,7 @@ import {
   calcularCustoItem,
   calcularCustoReceita,
   calcularCustoUnitario,
+  calcularPercentuaisSemLucro,
   calcularPreco,
   calcularPrecoNoCanal,
   calcularPrecoVenda,
@@ -320,6 +321,36 @@ describe('calcularPrecoNoCanal (BE-28)', () => {
       { ...basePao, impostoPercentual: 0.06, gastosPercentuais: 0.12 },
     );
     expect(r.percentuais).toBeCloseTo(0.3436, P);
+  });
+});
+
+describe('calcularPercentuaisSemLucro (BE-30)', () => {
+  const base = {
+    impostoPercentual: 0,
+    taxaMaquininha: 0.0136,
+    gastosPercentuais: 0,
+  };
+
+  it('Balcão: imposto + maquininha + gastos percentuais, sem o lucro', () => {
+    expect(
+      calcularPercentuaisSemLucro(
+        { balcao: true, comissaoPercentual: 0.5 },
+        {
+          impostoPercentual: 0.06,
+          taxaMaquininha: 0.0136,
+          gastosPercentuais: 0.12,
+        },
+      ),
+    ).toBeCloseTo(0.1936, P);
+  });
+
+  it('iFood: a comissão do canal no lugar da maquininha', () => {
+    expect(
+      calcularPercentuaisSemLucro(
+        { balcao: false, comissaoPercentual: 0.152 },
+        base,
+      ),
+    ).toBeCloseTo(0.152, P);
   });
 });
 

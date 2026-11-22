@@ -4,6 +4,7 @@ import {
   IsArray,
   IsInt,
   IsNumber,
+  IsOptional,
   IsPositive,
   ValidateNested,
 } from 'class-validator';
@@ -27,6 +28,15 @@ export class ItemVendaInputDto {
 
 /** Corpo de `POST /vendas`, como o `CreateVendaDto` do sales-service. */
 export class CreateVendaDto {
+  /**
+   * Novo (BE-30), opcional: canal onde a venda aconteceu, ativo ou não;
+   * omitido → Balcão. De outra empresa → 404. @example 1
+   */
+  @IsOptional()
+  @IsInt()
+  @IsPositive()
+  canal_id?: number;
+
   /** Não pode ser vazio (BE-13, lacuna 25). */
   @IsArray()
   @ArrayNotEmpty()

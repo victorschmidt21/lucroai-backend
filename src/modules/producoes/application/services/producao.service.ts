@@ -48,8 +48,9 @@ export class ProducaoService {
   }
 
   /**
-   * Numa transação só (BE-12): grava a produção e os rateios, dá baixa nos
-   * insumos (saldo negativo aceito, lacuna 10) e dá entrada no produto
+   * Numa transação só (BE-12): grava a produção e os rateios dos gastos
+   * mensais (BE-30: ingredientes ao custo médio + forno, uma vez só), dá baixa
+   * nos insumos (saldo negativo aceito, lacuna 10) e dá entrada no produto
    * acabado. Receita e gastos de outra empresa → 404 (lacuna 11).
    */
   create(dto: CreateProducaoDto, empresaId: number): Promise<ProducaoDto> {
@@ -72,7 +73,12 @@ export class ProducaoService {
         tx,
       );
       const calculo = calcularProducao(
-        receita,
+        {
+          rendimento: receita.rendimento,
+          // Ao custo médio dos insumos (BE-30), sem os gastos da receita.
+          ingredientesLote: receita.custo.detalhe.ingredientesLote,
+          usoPorLote: receita.usoPorLote,
+        },
         dto.quantidade,
         gastos,
         configuracao.capacidadeMensal,

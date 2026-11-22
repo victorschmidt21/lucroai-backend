@@ -11,17 +11,29 @@ export interface ItemNovaVenda {
   receitaId: number;
   quantidade: number;
   precoUnitarioReal: number;
-  /** `custoUnitario` salvo na receita; `null` quando ela não tem custo. */
+  /**
+   * Custo unitário da receita com o custo médio dos insumos (BE-30); `null`
+   * quando ela não tem custo.
+   */
   custoUnitario: number | null;
 }
 
 export interface ItemVendaCalculado extends ItemNovaVenda {
   margemRealizada: number | null;
+  lucroReal: number | null;
+}
+
+/** Canal da venda nova (BE-30). */
+export interface CanalDaVenda {
+  canalId: number | null;
+  /** Imposto + taxa do canal + gastos `PERCENTUAL_VENDA`, fração do preço. */
+  percentuaisSemLucro: number;
 }
 
 /** O que a venda nova grava: o `id` e a `dataVenda` vêm do banco. */
 export interface NovaVenda {
   empresaId: number;
+  canalId: number | null;
   total: number;
   status: StatusVenda;
   itens: ItemVendaCalculado[];
@@ -50,10 +62,15 @@ export class Venda {
   }
 
   /**
-   * Dados de uma venda nova: margem de cada item, total e status `PENDENTE`.
-   * Itens vazios → 400 (BE-13, lacuna 25; o DTO já barra antes).
+   * Dados de uma venda nova: margem e lucro real de cada item (BE-30), total
+   * e status `PENDENTE`. Itens vazios → 400 (BE-13, lacuna 25; o DTO já barra
+   * antes).
    */
-  static nova(empresaId: number, itens: ItemNovaVenda[]): NovaVenda {
+  static nova(
+    empresaId: number,
+    itens: ItemNovaVenda[],
+    canal: CanalDaVenda,
+  ): NovaVenda {
     if (itens.length === 0) {
       throw new InvalidInputError(
         'VENDA_SEM_ITENS',
@@ -62,6 +79,7 @@ export class Venda {
     }
     return {
       empresaId,
+      canalId: canal.canalId,
       total: Venda.calcularTotal(itens),
       status: 'PENDENTE',
       itens: itens.map((item) => ({
@@ -69,6 +87,11 @@ export class Venda {
         margemRealizada: Venda.calcularMargemRealizada(
           item.precoUnitarioReal,
           item.custoUnitario,
+        ),
+        lucroReal: Venda.calcularLucroReal(
+          item.precoUnitarioReal,
+          item.custoUnitario,
+          canal.percentuaisSemLucro,
         ),
       })),
     };
@@ -84,6 +107,21 @@ export class Venda {
   ): number | null {
     if (custoUnitario == null) return null;
     return (precoUnitarioReal - custoUnitario) / precoUnitarioReal;
+  }
+
+  /**
+   * Lucro real do item (BE-30), na mesma base do lucro do preço (fração do
+   * preço): `1 − percentuaisSemLucro − custo ÷ preço`. Vendido pelo preço
+   * sugerido do canal, é o lucro configurado. `null` sem custo; pode ser
+   * negativo. Sem arredondar: o `VendaDto` usa `round4`.
+   */
+  static calcularLucroReal(
+    precoUnitarioReal: number,
+    custoUnitario: number | null,
+    percentuaisSemLucro: number,
+  ): number | null {
+    if (custoUnitario == null) return null;
+    return 1 - percentuaisSemLucro - custoUnitario / precoUnitarioReal;
   }
 
   /** `Σ quantidade × preço`, sem arredondar (o `VendaDto` usa `round2`). */

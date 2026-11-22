@@ -27,6 +27,45 @@ describe('Venda.calcularMargemRealizada', () => {
   });
 });
 
+// Pão francês da BE-28: custo de R$ 0,58221 por unidade (aqui com o custo
+// médio igual à reposição), maquininha de 1,36%, imposto 0 e lucro de 15%.
+const custoPao = 27.655 / 50 / 0.95;
+const MAQUININHA = 0.0136;
+const IFOOD = 0.152;
+const precoBalcao = custoPao / (1 - MAQUININHA - 0.15);
+
+describe('Venda.calcularLucroReal (BE-30)', () => {
+  it('pão vendido no Balcão pelo preço sugerido: lucro real de 15%', () => {
+    expect(
+      Venda.calcularLucroReal(precoBalcao, custoPao, MAQUININHA),
+    ).toBeCloseTo(0.15, P);
+  });
+
+  it('no iFood pelo mesmo preço: bem menos (a comissão sai do lucro)', () => {
+    // 1 − 0,152 − 0,8364 = 0,0116
+    expect(Venda.calcularLucroReal(precoBalcao, custoPao, IFOOD)).toBeCloseTo(
+      0.0116,
+      P,
+    );
+  });
+
+  it('com o preço digitado (R$ 0,70), perto dos 15%', () => {
+    // 1 − 0,0136 − 0,58221 ÷ 0,70
+    expect(Venda.calcularLucroReal(0.7, custoPao, MAQUININHA)).toBeCloseTo(
+      1 - MAQUININHA - custoPao / 0.7,
+      P,
+    );
+  });
+
+  it('pode ser negativo abaixo do custo', () => {
+    expect(Venda.calcularLucroReal(5, 7.5, 0)).toBe(-0.5);
+  });
+
+  it('sem custo na receita → null', () => {
+    expect(Venda.calcularLucroReal(12, null, MAQUININHA)).toBeNull();
+  });
+});
+
 describe('Venda.calcularTotal', () => {
   it('Σ quantidade × preço, sem arredondar', () => {
     expect(
@@ -39,24 +78,29 @@ describe('Venda.calcularTotal', () => {
 });
 
 describe('Venda.nova', () => {
-  it('calcula a margem de cada item, o total e nasce PENDENTE', () => {
+  it('calcula a margem e o lucro real de cada item, o total e nasce PENDENTE', () => {
     expect(
-      Venda.nova(7, [
-        {
-          receitaId: 1,
-          quantidade: 2,
-          precoUnitarioReal: 12,
-          custoUnitario: 7.3456,
-        },
-        {
-          receitaId: 2,
-          quantidade: 1,
-          precoUnitarioReal: 8.5,
-          custoUnitario: null,
-        },
-      ]),
+      Venda.nova(
+        7,
+        [
+          {
+            receitaId: 1,
+            quantidade: 2,
+            precoUnitarioReal: 12,
+            custoUnitario: 7.3456,
+          },
+          {
+            receitaId: 2,
+            quantidade: 1,
+            precoUnitarioReal: 8.5,
+            custoUnitario: null,
+          },
+        ],
+        { canalId: 3, percentuaisSemLucro: 0.1 },
+      ),
     ).toEqual({
       empresaId: 7,
+      canalId: 3,
       total: 32.5,
       status: 'PENDENTE',
       itens: [
@@ -66,6 +110,8 @@ describe('Venda.nova', () => {
           precoUnitarioReal: 12,
           custoUnitario: 7.3456,
           margemRealizada: expect.closeTo(0.3878666667, P),
+          // 1 − 0,1 − 7,3456 ÷ 12
+          lucroReal: expect.closeTo(0.2878666667, P),
         },
         {
           receitaId: 2,
@@ -73,13 +119,16 @@ describe('Venda.nova', () => {
           precoUnitarioReal: 8.5,
           custoUnitario: null,
           margemRealizada: null,
+          lucroReal: null,
         },
       ],
     });
   });
 
   it('sem itens → 400 VENDA_SEM_ITENS', () => {
-    expect(() => Venda.nova(7, [])).toThrow(InvalidInputError);
+    expect(() =>
+      Venda.nova(7, [], { canalId: null, percentuaisSemLucro: 0 }),
+    ).toThrow(InvalidInputError);
   });
 });
 

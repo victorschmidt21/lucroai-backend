@@ -370,6 +370,22 @@ export function calcularPrecoNoCanal(
   });
 }
 
+/**
+ * Fração do preço que fica com o imposto, a taxa do canal e os gastos
+ * `PERCENTUAL_VENDA`: os percentuais do preço sem o lucro (BE-30). É o que
+ * a venda desconta no lucro real.
+ */
+export function calcularPercentuaisSemLucro(
+  canal: CanalParaTaxa,
+  base: Omit<BasePreco, 'lucro'>,
+): number {
+  return (
+    base.impostoPercentual +
+    taxaDoCanal(canal, base.taxaMaquininha) +
+    base.gastosPercentuais
+  );
+}
+
 export interface CustoReceitaInput {
   itens: ItemParaCusto[];
   rendimento: number;

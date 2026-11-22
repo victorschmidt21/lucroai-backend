@@ -13,7 +13,7 @@ export class CreateProducaoDto {
 
   /**
    * Gastos rateados. Omitido rateia todos os gastos da empresa; `[]` não
-   * rateia nenhum. @example [1, 2]
+   * rateia nenhum. Só os `MENSAL` entram na produção (BE-30). @example [1, 2]
    */
   @IsOptional()
   @IsArray()

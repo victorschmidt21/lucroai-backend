@@ -31,6 +31,7 @@ import { calcularCustoUnitario } from '../src/modules/insumos/domain/insumos.cal
 import { calcularProducao } from '../src/modules/producoes/domain/producoes.calculos.js';
 import {
   calcularCustoReceita,
+  calcularPercentuaisSemLucro,
   calcularPrecoNoCanal,
   lucroDaMargem,
   somarGastosPercentuais,
@@ -388,9 +389,14 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
     update: { ...CONFIGURACAO_CUSTOS_PADRAO },
   });
 
-  // Canais de venda padrão (BE-25), recriados a cada seed.
+  // Canais de venda padrão (BE-25), recriados a cada seed. As vendas do seed
+  // são no Balcão (BE-30).
+  let balcaoId: number | null = null;
   for (const canal of CANAIS_PADRAO) {
-    await tx.canalVenda.create({ data: { ...canal, empresaId } });
+    const criado = await tx.canalVenda.create({
+      data: { ...canal, empresaId },
+    });
+    if (criado.balcao) balcaoId = criado.id;
   }
 
   for (const usuario of USUARIOS) {
@@ -464,6 +470,7 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
       rendimento: number;
       custoProducao: number;
       custoUnitario: number;
+      ingredientesLote: number;
       precoSugerido: number;
       itens: { insumoId: number; quantidade: number }[];
     }
@@ -516,6 +523,7 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
       rendimento: def.rendimento,
       custoProducao: custo.custoProducao,
       custoUnitario: custo.custoUnitario,
+      ingredientesLote: custo.detalhe.ingredientesLote,
       precoSugerido: precoBalcao.preco ?? 0,
       itens: custo.itens,
     });
@@ -609,10 +617,22 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
           custoUnitario: r.custoUnitario,
         };
       }),
+      {
+        canalId: balcaoId,
+        percentuaisSemLucro: calcularPercentuaisSemLucro(
+          { balcao: true, comissaoPercentual: 0 },
+          {
+            impostoPercentual: CONFIGURACAO_CUSTOS_PADRAO.impostoPercentual,
+            taxaMaquininha: CONFIGURACAO_CUSTOS_PADRAO.taxaMaquininha,
+            gastosPercentuais: somarGastosPercentuais(gastos),
+          },
+        ),
+      },
     );
     const venda = await tx.venda.create({
       data: {
         empresaId,
+        canalId: nova.canalId,
         total: nova.total,
         status: def.status,
         dataVenda: data,

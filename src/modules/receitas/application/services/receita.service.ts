@@ -44,17 +44,23 @@ import {
 import type { UpdateReceitaDto } from '../dto/update-receita.dto.js';
 
 /**
- * Receita com o custo de 1 lote calculado na leitura (BE-27), para outros
- * módulos (produções, vendas). Valores **sem arredondar** (BE-23).
+ * Receita com o custo de 1 lote calculado na leitura, para outros módulos
+ * (produções, vendas). **Muda (BE-30):** o custo usa o **custo médio** dos
+ * insumos (o que já foi gasto), não a reposição, que só forma o preço.
+ * Valores **sem arredondar** (BE-23).
  */
 export type ReceitaComCusto = ReceitaComItens & {
-  custoProducao: number;
-  custoUnitario: number;
+  custo: CustoReceita;
+  /** Imposto, maquininha, gastos `PERCENTUAL_VENDA` e lucro da receita. */
+  basePreco: BasePreco;
 };
 
 /** O que o custo de uma receita precisa da empresa, buscado uma vez só. */
 interface ContextoCusto {
+  /** Custo de reposição (BE-29): forma o preço. */
   custoPorInsumo: Map<number, number>;
+  /** Custo médio (BE-30): o custo de produção e venda. */
+  custoMedioPorInsumo: Map<number, number>;
   gastos: Awaited<ReturnType<GastoIndiretoService['listarPorEmpresa']>>;
   configuracao: Awaited<
     ReturnType<ConfiguracaoCustosService['buscarDaEmpresa']>
@@ -207,9 +213,10 @@ export class ReceitaService {
   }
 
   /**
-   * Para outros módulos (produções, vendas): a receita com os itens e o custo
-   * de 1 lote calculado agora; 404 se não for da empresa. Valores **sem
-   * arredondar** (não o `ReceitaDto`), porque entram em outras contas (BE-23).
+   * Para outros módulos (produções, vendas): a receita com os itens, o custo
+   * de 1 lote com o custo médio dos insumos (BE-30) e a base do preço; 404 se
+   * não for da empresa. Valores **sem arredondar** (não o `ReceitaDto`),
+   * porque entram em outras contas (BE-23).
    */
   async buscarDaEmpresa(
     id: number,
@@ -217,14 +224,11 @@ export class ReceitaService {
     tx?: PrismaTransaction,
   ): Promise<ReceitaComCusto> {
     const receita = await this.getOrFail(id, empresaId, tx);
-    const custo = this.calcular(
-      receita,
-      await this.contextoDe(receita, empresaId, tx),
-    );
+    const contexto = await this.contextoDe(receita, empresaId, tx);
     return {
       ...receita,
-      custoProducao: custo.custoProducao,
-      custoUnitario: custo.custoUnitario,
+      custo: this.calcular(receita, contexto, 1, contexto.custoMedioPorInsumo),
+      basePreco: this.basePreco(receita, contexto),
     };
   }
 
@@ -290,12 +294,13 @@ export class ReceitaService {
     receita: ReceitaComItens,
     contexto: ContextoCusto,
     lotes = 1,
+    custoPorInsumo = contexto.custoPorInsumo,
   ): CustoReceita {
     return calcularCustoReceita({
       itens: receita.itens.map((item) => ({
         insumoId: item.insumoId,
         quantidade: item.quantidade,
-        custoUnitario: contexto.custoPorInsumo.get(item.insumoId) ?? 0,
+        custoUnitario: custoPorInsumo.get(item.insumoId) ?? 0,
       })),
       rendimento: receita.rendimento,
       usoPorLote: receita.usoPorLote,
@@ -352,6 +357,7 @@ export class ReceitaService {
       custoPorInsumo: new Map(
         insumos.map((i) => [i.id, calcularCustoReposicao(i)]),
       ),
+      custoMedioPorInsumo: new Map(insumos.map((i) => [i.id, i.custoMedio])),
       gastos,
       configuracao,
       canais,

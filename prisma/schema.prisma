@@ -199,6 +199,7 @@ model CanalVenda {
   balcao             Boolean @default(false)
 
   empresa Empresa @relation(fields: [empresaId], references: [id])
+  vendas  Venda[]
 
   @@index([empresaId])
   @@map("canal_venda")
@@ -372,11 +373,16 @@ model Venda {
   total     Float?
   status    StatusVenda @default(PENDENTE)
   dataVenda DateTime    @default(now()) @map("data_venda")
+  /// Canal da venda (BE-30); null nas vendas antigas e depois de o canal ser excluído
+  canalId   Int?        @map("canal_id")
 
   empresa Empresa     @relation(fields: [empresaId], references: [id])
+  /// SET NULL: excluir o canal não apaga as vendas dele
+  canal   CanalVenda? @relation(fields: [canalId], references: [id], onDelete: SetNull)
   itens   ItemVenda[]
 
   @@index([empresaId, dataVenda])
+  @@index([canalId])
   @@map("venda")
 }
 
@@ -391,6 +397,8 @@ model ItemVenda {
   custoUnitario     Float? @map("custo_unitario")
   /// (precoUnitarioReal - custoUnitario) / precoUnitarioReal, com round4
   margemRealizada   Float? @map("margem_realizada")
+  /// 1 − percentuais do canal sem o lucro − custoUnitario ÷ precoUnitarioReal (BE-30)
+  lucroReal         Float? @map("lucro_real")
 
   venda   Venda   @relation(fields: [vendaId], references: [id], onDelete: Cascade)
   /// RESTRICT: receita vendida não pode ser excluída

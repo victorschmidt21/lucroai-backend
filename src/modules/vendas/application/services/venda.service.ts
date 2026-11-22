@@ -2,8 +2,13 @@ import { Injectable } from '@nestjs/common';
 import { NotFoundError } from '../../../../shared/domain/errors/domain.error.js';
 import type { PrismaTransaction } from '../../../../shared/infra/database/prisma.transaction.js';
 import { TransactionManager } from '../../../../shared/infra/database/transaction.manager.js';
+import { CanalVendaService } from '../../../canais/application/services/canal-venda.service.js';
 import { EstoqueProdutoAcabadoService } from '../../../estoque/application/services/estoque-produto-acabado.service.js';
-import { ReceitaService } from '../../../receitas/application/services/receita.service.js';
+import {
+  type ReceitaComCusto,
+  ReceitaService,
+} from '../../../receitas/application/services/receita.service.js';
+import { calcularPercentuaisSemLucro } from '../../../receitas/domain/receitas.calculos.js';
 import { Venda, vendaFinalizada } from '../../domain/venda.entity.js';
 import { VendaRepository } from '../../infra/repositories/venda.repository.js';
 import type { CreateVendaDto } from '../dto/create-venda.dto.js';
@@ -20,6 +25,7 @@ export class VendaService {
   constructor(
     private readonly repository: VendaRepository,
     private readonly receitaService: ReceitaService,
+    private readonly canalVendaService: CanalVendaService,
     private readonly estoqueProdutoAcabadoService: EstoqueProdutoAcabadoService,
     private readonly transactionManager: TransactionManager,
   ) {}
@@ -42,28 +48,43 @@ export class VendaService {
   }
 
   /**
-   * Registra a venda `PENDENTE` com o custo unitário salvo de cada receita
-   * copiado na hora. Receita de outra empresa → 404 (lacuna 26). Não confere
-   * o estoque (lacuna 24): a barreira é a conclusão.
+   * Registra a venda `PENDENTE` no canal informado (Balcão se omitido, BE-30),
+   * com o custo unitário de cada receita ao custo médio dos insumos copiado na
+   * hora e o lucro real de cada item. Receita ou canal de outra empresa → 404
+   * (lacuna 26). Não confere o estoque (lacuna 24): a barreira é a conclusão.
    */
   async create(dto: CreateVendaDto, empresaId: number): Promise<VendaDto> {
-    const custos = new Map<number, number | null>();
+    const canal = await this.canalVendaService.buscarParaVenda(
+      dto.canal_id,
+      empresaId,
+    );
+    const receitas = new Map<number, ReceitaComCusto>();
     for (const item of dto.itens) {
-      if (custos.has(item.receita_id)) continue;
-      const receita = await this.receitaService.buscarDaEmpresa(
+      if (receitas.has(item.receita_id)) continue;
+      receitas.set(
         item.receita_id,
-        empresaId,
+        await this.receitaService.buscarDaEmpresa(item.receita_id, empresaId),
       );
-      custos.set(item.receita_id, receita.custoUnitario ?? null);
     }
+    // Imposto, maquininha e gastos percentuais são da empresa, iguais em
+    // todas as receitas; o lucro da receita não entra.
+    const [primeira] = receitas.values();
     const nova = Venda.nova(
       empresaId,
       dto.itens.map((item) => ({
         receitaId: item.receita_id,
         quantidade: item.quantidade,
         precoUnitarioReal: item.preco_unitario_real,
-        custoUnitario: custos.get(item.receita_id) ?? null,
+        custoUnitario:
+          receitas.get(item.receita_id)?.custo.custoUnitario ?? null,
       })),
+      {
+        canalId: canal.id,
+        // Sem itens não há receita; `Venda.nova` responde 400.
+        percentuaisSemLucro: primeira
+          ? calcularPercentuaisSemLucro(canal, primeira.basePreco)
+          : 0,
+      },
     );
     return toVendaDto(await this.repository.create(nova));
   }
