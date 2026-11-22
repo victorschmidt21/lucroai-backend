@@ -96,6 +96,36 @@ const resumoVendasSchema = z.object({
   }),
 });
 
+/** `GET /alertas` é novo (BE-32) e não tem schema no frontend. */
+const alertasSchema = z.object({
+  estoqueNegativo: z.array(
+    z.object({
+      id: z.number().int(),
+      nome: z.string(),
+      saldo: z.number(),
+      unidade: z.string(),
+    }),
+  ),
+  precoDefasado: z.array(
+    z.object({
+      id: z.number().int(),
+      nome: z.string(),
+      unidade: z.string(),
+      custoMedio: z.number(),
+      custoReposicao: z.number(),
+      aumentoPercentual: z.number(),
+      receitas: z.array(
+        z.object({
+          id: z.number().int(),
+          nome: z.string(),
+          precoSugerido: z.number().nullable(),
+          precoComCustoMedio: z.number().nullable(),
+        }),
+      ),
+    }),
+  ),
+});
+
 const healthSchema = z.object({
   status: z.literal('ok'),
   database: z.string(),
@@ -808,6 +838,94 @@ describe('Contrato com o frontend (e2e)', () => {
     });
   });
 
+  describe('6. alertas', () => {
+    // Na empresa B, depois do isolamento, para não mexer nos saldos da A.
+    it('GET /alertas traz o estoque negativo e o preço defasado', async () => {
+      const vazio = await comA('get', '/alertas').expect(200);
+      expect(validar(alertasSchema, vazio.body)).toEqual({
+        estoqueNegativo: [],
+        precoDefasado: [],
+      });
+
+      // Farinha a R$ 4/kg com 1 kg; o pão usa 2 kg por lote.
+      const criada = await comB('post', '/insumos')
+        .send({
+          nome: 'Farinha B',
+          quantidadeBaseCusto: 1,
+          unidade: 'KG',
+          valorPago: 4,
+          quantidadeDisponivelInicial: 1,
+        })
+        .expect(201);
+      const farinhaB = validar(insumoSchema, criada.body).id;
+      expect(criada.body).toMatchObject({ estoqueNegativo: false });
+      const pao = await comB('post', '/receitas')
+        .send({
+          nome: 'Pão B',
+          rendimento: 40,
+          unidadeRendimento: 'UN',
+          insumos: [{ insumo_id: farinhaB, quantidade: 2 }],
+        })
+        .expect(201);
+      const paoId = validar(receitaSchema, pao.body).id;
+
+      // Produzir sem saldo é permitido e deixa o insumo negativo.
+      await comB('post', '/producoes')
+        .send({ receita_id: paoId, quantidade: 1 })
+        .expect(201);
+      const insumo = await comB('get', `/insumos/${farinhaB}`).expect(200);
+      expect(validar(insumoSchema, insumo.body)).toMatchObject({
+        quantidadeDisponivel: -1,
+      });
+      expect(insumo.body).toMatchObject({ estoqueNegativo: true });
+      const saldo = await comB('get', `/estoque/insumos/${farinhaB}`).expect(
+        200,
+      );
+      expect(validar(estoqueSchema, saldo.body)).toMatchObject({
+        quantidadeDisponivel: -1,
+      });
+      expect(saldo.body).toMatchObject({ estoqueNegativo: true });
+
+      // Reposição 25% acima do médio: R$ 5/kg informado no PATCH.
+      await comB('patch', `/insumos/${farinhaB}`)
+        .send({ valorPago: 5 })
+        .expect(200);
+      const novo = await comB('get', `/receitas/${paoId}`).expect(200);
+      const precoNovo = validar(receitaSchema, novo.body).precoSugerido;
+
+      const res = await comB('get', '/alertas').expect(200);
+      const alertas = validar(alertasSchema, res.body);
+      expect(alertas.estoqueNegativo).toEqual([
+        { id: farinhaB, nome: 'Farinha B', saldo: -1, unidade: 'KG' },
+      ]);
+      expect(alertas.precoDefasado).toEqual([
+        {
+          id: farinhaB,
+          nome: 'Farinha B',
+          unidade: 'KG',
+          custoMedio: 4,
+          custoReposicao: 5,
+          aumentoPercentual: 0.25,
+          receitas: [
+            {
+              id: paoId,
+              nome: 'Pão B',
+              precoSugerido: precoNovo,
+              precoComCustoMedio: expect.any(Number),
+            },
+          ],
+        },
+      ]);
+      expect(
+        alertas.precoDefasado[0]?.receitas[0]?.precoComCustoMedio,
+      ).toBeLessThan(precoNovo ?? 0);
+
+      // A empresa A não vê os alertas da B.
+      const daA = await comA('get', '/alertas').expect(200);
+      expect(validar(alertasSchema, daA.body).estoqueNegativo).toEqual([]);
+    });
+  });
+
   describe('autenticação', () => {
     const protegidas: Rota[] = [
       ['get', '/insumos'],
@@ -843,6 +961,7 @@ describe('Contrato com o frontend (e2e)', () => {
       ['get', '/vendas/1'],
       ['post', '/vendas'],
       ['patch', '/vendas/1/status'],
+      ['get', '/alertas'],
     ];
 
     it('rotas sem token respondem 401 NAO_AUTENTICADO', async () => {
