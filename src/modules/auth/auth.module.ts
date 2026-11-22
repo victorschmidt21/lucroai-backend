@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { CanaisModule } from '../canais/canais.module.js';
 import { ConfiguracaoCustosModule } from '../configuracao-custos/configuracao-custos.module.js';
 import { AuthService } from './application/services/auth.service.js';
 import { AuthController } from './infra/controllers/auth.controller.js';
@@ -13,6 +14,8 @@ import { UsuarioRepository } from './infra/repositories/usuario.repository.js';
   imports: [
     // Cria a configuração de custos padrão no cadastro da empresa (BE-24).
     ConfiguracaoCustosModule,
+    // Cria os canais de venda padrão no cadastro da empresa (BE-25).
+    CanaisModule,
     // Só o AuthController usa o ThrottlerGuard (as outras rotas exigem token):
     // 10 tentativas por minuto para cada IP e e-mail.
     ThrottlerModule.forRoot({ throttlers: [{ ttl: 60_000, limit: 10 }] }),

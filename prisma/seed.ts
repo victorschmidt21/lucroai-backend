@@ -25,6 +25,7 @@ import {
   calcularSaidaProdutoAcabado,
   calcularSaldoAposMovimentacao,
 } from '../src/modules/estoque/domain/estoque.calculos.js';
+import { CANAIS_PADRAO } from '../src/modules/canais/domain/canais.calculos.js';
 import { CONFIGURACAO_CUSTOS_PADRAO } from '../src/modules/configuracao-custos/domain/configuracao-custos.calculos.js';
 import { calcularCustoUnitario } from '../src/modules/insumos/domain/insumos.calculos.js';
 import { calcularProducao } from '../src/modules/producoes/domain/producoes.calculos.js';
@@ -366,6 +367,7 @@ async function limparEmpresa(tx: Tx, empresaId: number): Promise<void> {
   await tx.estoque.deleteMany({ where: { empresaId } });
   await tx.insumo.deleteMany({ where: { empresaId } });
   await tx.gastoIndireto.deleteMany({ where: { empresaId } });
+  await tx.canalVenda.deleteMany({ where: { empresaId } });
 }
 
 async function semear(tx: Tx, senhaHash: string): Promise<number> {
@@ -383,6 +385,11 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
     create: { ...CONFIGURACAO_CUSTOS_PADRAO, empresaId },
     update: { ...CONFIGURACAO_CUSTOS_PADRAO },
   });
+
+  // Canais de venda padrão (BE-25), recriados a cada seed.
+  for (const canal of CANAIS_PADRAO) {
+    await tx.canalVenda.create({ data: { ...canal, empresaId } });
+  }
 
   for (const usuario of USUARIOS) {
     const dados = { ...usuario, empresaId, senha: senhaHash };
