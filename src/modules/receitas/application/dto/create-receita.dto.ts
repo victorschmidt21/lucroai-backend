@@ -41,7 +41,7 @@ export class CreateReceitaDto {
   @MaxLength(80)
   nome: string;
 
-  /** Unidades produzidas por lote. @example 12 */
+  /** Unidades **boas** (vendáveis) por lote. @example 12 */
   @IsInt()
   @IsPositive()
   rendimento: number;
@@ -50,11 +50,48 @@ export class CreateReceitaDto {
   @IsEnum(UnidadeMedida)
   unidadeRendimento: UnidadeMedida;
 
-  /** Fração (0.5 = 50%), ≥ 0; sem margem não há preço sugerido. @example 0.5 */
+  /**
+   * Markup sobre o custo (0.5 = 50%), ≥ 0, mantido por compatibilidade:
+   * vira `lucro_percentual = margem ÷ (1 + margem)`, que dá o mesmo preço.
+   * Ignorado se `lucro_percentual` vier. @example 0.5
+   */
   @IsOptional()
   @IsNumber()
   @Min(0)
   margem_lucro?: number | null;
+
+  /**
+   * Fornadas ou minutos de forno de 1 lote, conforme a `baseRateio` da
+   * empresa, > 0. Padrão 1. @example 1
+   */
+  @IsOptional()
+  @IsNumber()
+  @IsPositive()
+  uso_por_lote?: number | null;
+
+  /** Reais por unidade (caixa, pote ou saquinho), ≥ 0. Padrão 0. @example 0.15 */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  embalagem_por_unidade?: number | null;
+
+  /**
+   * Fração das unidades que não são vendidas (sobra, queima), de 0 até
+   * menos de 1. Padrão 0. @example 0.05
+   */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  perda_percentual?: number | null;
+
+  /**
+   * Lucro como fração do **preço**, de 0 até menos de 1; omitido ou `null`
+   * usa o `lucroPadrao` da empresa. @example 0.15
+   */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  lucro_percentual?: number | null;
 
   /** Itens da receita (pelo menos um). */
   @IsArray()

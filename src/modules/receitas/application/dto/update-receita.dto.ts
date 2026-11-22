@@ -3,6 +3,7 @@ import { CreateReceitaDto } from './create-receita.dto.js';
 
 /**
  * Corpo de `PUT /receitas/:id`: campo omitido mantém o valor salvo, e
- * `margem_lucro: null` remove a margem e o preço sugerido (lacuna 21).
+ * `lucro_percentual: null` (ou `margem_lucro: null`) volta a usar o lucro
+ * padrão da empresa.
  */
 export class UpdateReceitaDto extends PartialType(CreateReceitaDto) {}

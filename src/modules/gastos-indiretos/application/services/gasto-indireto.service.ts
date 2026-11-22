@@ -2,6 +2,10 @@ import { Injectable } from '@nestjs/common';
 import type { GastoIndireto } from '../../../../generated/prisma/client.js';
 import { NotFoundError } from '../../../../shared/domain/errors/domain.error.js';
 import type { PrismaTransaction } from '../../../../shared/infra/database/prisma.transaction.js';
+import {
+  resolverTipoGasto,
+  validarGasto,
+} from '../../domain/gastos-indiretos.calculos.js';
 import { GastoIndiretoRepository } from '../../infra/repositories/gasto-indireto.repository.js';
 import type { CreateGastoIndiretoDto } from '../dto/create-gasto-indireto.dto.js';
 import {
@@ -27,25 +31,30 @@ export class GastoIndiretoService {
     dto: CreateGastoIndiretoDto,
     empresaId: number,
   ): Promise<GastoIndiretoDto> {
+    const gasto = { valor: dto.valor, tipo: resolverTipoGasto(dto) };
+    validarGasto(gasto);
     const row = await this.repository.create(empresaId, {
       descricao: dto.descricao,
-      valor: dto.valor,
-      metodoRateio: dto.metodo_rateio,
+      ...gasto,
     });
     return toGastoIndiretoDto(row);
   }
 
-  /** Campo omitido mantém o valor salvo. */
+  /** Campo omitido mantém o valor salvo; o valor é conferido com o tipo final. */
   async update(
     id: number,
     dto: UpdateGastoIndiretoDto,
     empresaId: number,
   ): Promise<GastoIndiretoDto> {
-    await this.getOrFail(id, empresaId);
+    const atual = await this.getOrFail(id, empresaId);
+    const gasto = {
+      valor: dto.valor ?? atual.valor,
+      tipo: resolverTipoGasto(dto, atual.tipo),
+    };
+    validarGasto(gasto);
     const row = await this.repository.update(id, {
       descricao: dto.descricao,
-      valor: dto.valor,
-      metodoRateio: dto.metodo_rateio,
+      ...gasto,
     });
     return toGastoIndiretoDto(row);
   }

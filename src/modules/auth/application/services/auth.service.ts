@@ -3,6 +3,8 @@ import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import { UnauthorizedError } from '../../../../shared/domain/errors/domain.error.js';
 import { TransactionManager } from '../../../../shared/infra/database/transaction.manager.js';
+import { CanalVendaService } from '../../../canais/application/services/canal-venda.service.js';
+import { ConfiguracaoCustosService } from '../../../configuracao-custos/application/services/configuracao-custos.service.js';
 import {
   type EmpresaParaToken,
   montarPayloadJwt,
@@ -28,9 +30,14 @@ export class AuthService {
     private readonly usuarioRepository: UsuarioRepository,
     private readonly transactionManager: TransactionManager,
     private readonly jwtService: JwtService,
+    private readonly configuracaoCustosService: ConfiguracaoCustosService,
+    private readonly canalVendaService: CanalVendaService,
   ) {}
 
-  /** Cria a empresa e o primeiro usuário na mesma transação. */
+  /**
+   * Cria a empresa, o primeiro usuário, a configuração de custos padrão
+   * (BE-24) e os canais de venda padrão (BE-25) na mesma transação.
+   */
   async criarEmpresa(dto: CreateEmpresaDto): Promise<EmpresaCriadaDto> {
     const senha = await argon2.hash(dto.senha);
 
@@ -55,6 +62,8 @@ export class AuthService {
           },
           tx,
         );
+        await this.configuracaoCustosService.criarPadrao(empresa.id, tx);
+        await this.canalVendaService.criarPadrao(empresa.id, tx);
         return { empresa, usuario };
       },
     );

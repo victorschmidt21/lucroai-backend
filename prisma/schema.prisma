@@ -21,10 +21,13 @@ enum UnidadeMedida {
   UN
 }
 
-enum MetodoRateio {
-  PROPORCIONAL
+/// Como o gasto entra no custo (BE-26): `MENSAL` é o valor do mês, dividido
+/// pela capacidade mensal; `POR_UNIDADE` é reais por unidade vendida;
+/// `PERCENTUAL_VENDA` é fração do preço (0 a 1).
+enum TipoGasto {
+  MENSAL
   POR_UNIDADE
-  FIXO
+  PERCENTUAL_VENDA
 }
 
 enum StatusVenda {
@@ -50,6 +53,12 @@ enum OrigemMovimentacaoProdutoAcabado {
   VENDA
 }
 
+/// Unidade da capacidade mensal da empresa (BE-24): fornadas ou minutos de forno.
+enum BaseRateio {
+  FORNADAS
+  MINUTOS
+}
+
 // ---------- auth ----------
 
 model Empresa {
@@ -69,6 +78,9 @@ model Empresa {
   movimentacoesProdutoAcabado MovimentacaoProdutoAcabado[]
   producoes                   Producao[]
   vendas                      Venda[]
+  configuracaoCustos          ConfiguracaoCustos?
+  canaisVenda                 CanalVenda[]
+  comprasInsumo               CompraInsumo[]
 
   @@map("empresa")
 }
@@ -95,28 +107,60 @@ model Insumo {
   nome                String        @db.VarChar(80)
   quantidadeBaseCusto Float         @map("quantidade_base_custo")
   unidade             UnidadeMedida
+  /// Último preço de referência (`valorPago` por `quantidadeBaseCusto`): o do
+  /// cadastro, o da última compra ou o informado no PATCH
   valorPago           Float         @map("valor_pago")
-  /// valorPago / quantidadeBaseCusto, arredondado
-  custoUnitario       Float         @map("custo_unitario")
+  /// Custo médio móvel por unidade (BE-29): estoque, produção e venda
+  custoMedio          Float         @map("custo_medio")
+  /// Custo por unidade da última compra (BE-29)
+  ultimoCusto         Float         @map("ultimo_custo")
+  /// Preço de mercado por unidade, informado sem compra (BE-29); a próxima
+  /// compra o limpa. Reposição = precoMercado ?? ultimoCusto
+  precoMercado        Float?        @map("preco_mercado")
+  precoMercadoData    DateTime?     @map("preco_mercado_data")
   dataCriacao         DateTime      @default(now()) @map("data_criacao")
 
   empresa       Empresa               @relation(fields: [empresaId], references: [id])
   estoque       Estoque?
   movimentacoes MovimentacaoEstoque[]
   itensReceita  ItemReceita[]
+  compras       CompraInsumo[]
 
   @@index([empresaId])
   @@map("insumo")
 }
 
+/// Compra de insumo (BE-29), imutável. Dá entrada no estoque (ENTRADA/COMPRA,
+/// `referenciaId` = id da compra) e recalcula o custo médio do insumo.
+model CompraInsumo {
+  id            Int      @id @default(autoincrement())
+  empresaId     Int      @map("empresa_id")
+  insumoId      Int      @map("insumo_id")
+  /// Na unidade do insumo; 0 só na compra inicial de um cadastro sem saldo
+  quantidade    Float
+  valorTotal    Float    @map("valor_total")
+  /// Custo por unidade da compra: valorTotal / quantidade (na compra inicial,
+  /// valorPago / quantidadeBaseCusto do cadastro)
+  custoUnitario Float    @map("custo_unitario")
+  observacao    String?  @db.VarChar(200)
+  dataCompra    DateTime @default(now()) @map("data_compra")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+  insumo  Insumo  @relation(fields: [insumoId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId])
+  @@index([insumoId, dataCompra])
+  @@map("compra_insumo")
+}
+
 // ---------- gastos-indiretos ----------
 
 model GastoIndireto {
-  id           Int          @id @default(autoincrement())
-  empresaId    Int          @map("empresa_id")
-  descricao    String       @db.VarChar(100)
-  valor        Float
-  metodoRateio MetodoRateio @map("metodo_rateio")
+  id        Int       @id @default(autoincrement())
+  empresaId Int       @map("empresa_id")
+  descricao String    @db.VarChar(100)
+  valor     Float
+  tipo      TipoGasto
 
   empresa Empresa @relation(fields: [empresaId], references: [id])
 
@@ -124,24 +168,61 @@ model GastoIndireto {
   @@map("gasto_indireto")
 }
 
+// ---------- configuracao-custos ----------
+
+/// Configuração de custos da empresa (BE-24): uma por empresa, criada com os
+/// padrões no cadastro. As frações são do preço de venda (0 a 1).
+model ConfiguracaoCustos {
+  id                Int        @id @default(autoincrement())
+  empresaId         Int        @unique @map("empresa_id")
+  baseRateio        BaseRateio @default(FORNADAS) @map("base_rateio")
+  capacidadeMensal  Float      @default(40) @map("capacidade_mensal")
+  lucroPadrao       Float      @default(0.15) @map("lucro_padrao")
+  impostoPercentual Float      @default(0) @map("imposto_percentual")
+  taxaMaquininha    Float      @default(0) @map("taxa_maquininha")
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+
+  @@map("configuracao_custos")
+}
+
+// ---------- canais ----------
+
+/// Canal de venda (BE-25): balcão, iFood etc. A comissão é fração do preço
+/// (0 a 1). `balcao` marca o canal padrão, que não pode ser excluído.
+model CanalVenda {
+  id                 Int     @id @default(autoincrement())
+  empresaId          Int     @map("empresa_id")
+  nome               String
+  comissaoPercentual Float   @map("comissao_percentual")
+  ativo              Boolean @default(true)
+  balcao             Boolean @default(false)
+
+  empresa Empresa @relation(fields: [empresaId], references: [id])
+  vendas  Venda[]
+
+  @@index([empresaId])
+  @@map("canal_venda")
+}
+
 // ---------- receitas ----------
 
 model Receita {
-  id                Int           @id @default(autoincrement())
-  empresaId         Int           @map("empresa_id")
-  nome              String        @db.VarChar(80)
-  /// Unidades produzidas por lote
-  rendimento        Int
-  unidadeRendimento UnidadeMedida @map("unidade_rendimento")
-  /// Soma dos itens + custo invisível de 1 lote
-  custoProducao     Float?        @map("custo_producao")
-  /// custoProducao / rendimento
-  custoUnitario     Float?        @map("custo_unitario")
-  /// Fração (0.30 = 30%)
-  margemLucro       Float?        @map("margem_lucro")
-  /// custoUnitario * (1 + margemLucro)
-  precoSugerido     Float?        @map("preco_sugerido")
-  dataCriacao       DateTime      @default(now()) @map("data_criacao")
+  id                  Int           @id @default(autoincrement())
+  empresaId           Int           @map("empresa_id")
+  nome                String        @db.VarChar(80)
+  /// Unidades boas (vendáveis) por lote
+  rendimento          Int
+  unidadeRendimento   UnidadeMedida @map("unidade_rendimento")
+  /// Fornadas ou minutos de forno de 1 lote, conforme a baseRateio da empresa
+  usoPorLote          Float         @default(1) @map("uso_por_lote")
+  /// Reais por unidade (caixa, pote ou saquinho do próprio produto)
+  embalagemPorUnidade Float         @default(0) @map("embalagem_por_unidade")
+  /// Fração das unidades que não são vendidas (0 ≤ perda < 1)
+  perdaPercentual     Float         @default(0) @map("perda_percentual")
+  /// Fração do preço; null usa o lucroPadrao da empresa
+  lucroPercentual     Float?        @map("lucro_percentual")
+  dataCriacao         DateTime      @default(now()) @map("data_criacao")
 
   empresa                     Empresa                      @relation(fields: [empresaId], references: [id])
   itens                       ItemReceita[]
@@ -155,12 +236,10 @@ model Receita {
 }
 
 model ItemReceita {
-  id             Int    @id @default(autoincrement())
-  receitaId      Int    @map("receita_id")
-  insumoId       Int    @map("insumo_id")
-  quantidade     Float
-  /// quantidade * insumo.custoUnitario
-  custoCalculado Float? @map("custo_calculado")
+  id         Int   @id @default(autoincrement())
+  receitaId  Int   @map("receita_id")
+  insumoId   Int   @map("insumo_id")
+  quantidade Float
 
   receita Receita @relation(fields: [receitaId], references: [id], onDelete: Cascade)
   /// RESTRICT: insumo usado em receita não pode ser excluído (409 INSUMO_EM_USO, BE-07)
@@ -196,7 +275,8 @@ model MovimentacaoEstoque {
   tipo             TipoMovimentacaoEstoque
   origem           OrigemMovimentacaoEstoque
   quantidade       Float
-  /// Id da produção (origem PRODUCAO); nulo na compra
+  /// Id da produção (origem PRODUCAO) ou da compra (origem COMPRA, BE-29);
+  /// nulo na entrada manual
   referenciaId     Int?                      @map("referencia_id")
   observacao       String?                   @db.VarChar(200)
   dataMovimentacao DateTime                  @default(now()) @map("data_movimentacao")
@@ -293,11 +373,16 @@ model Venda {
   total     Float?
   status    StatusVenda @default(PENDENTE)
   dataVenda DateTime    @default(now()) @map("data_venda")
+  /// Canal da venda (BE-30); null nas vendas antigas e depois de o canal ser excluído
+  canalId   Int?        @map("canal_id")
 
   empresa Empresa     @relation(fields: [empresaId], references: [id])
+  /// SET NULL: excluir o canal não apaga as vendas dele
+  canal   CanalVenda? @relation(fields: [canalId], references: [id], onDelete: SetNull)
   itens   ItemVenda[]
 
   @@index([empresaId, dataVenda])
+  @@index([canalId])
   @@map("venda")
 }
 
@@ -312,6 +397,8 @@ model ItemVenda {
   custoUnitario     Float? @map("custo_unitario")
   /// (precoUnitarioReal - custoUnitario) / precoUnitarioReal, com round4
   margemRealizada   Float? @map("margem_realizada")
+  /// 1 − percentuais do canal sem o lucro − custoUnitario ÷ precoUnitarioReal (BE-30)
+  lucroReal         Float? @map("lucro_real")
 
   venda   Venda   @relation(fields: [vendaId], references: [id], onDelete: Cascade)
   /// RESTRICT: receita vendida não pode ser excluída

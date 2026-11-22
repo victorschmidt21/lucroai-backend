@@ -8,6 +8,7 @@ import { setupApp } from '../src/app.setup.js';
 import { jwtPayloadSchema, loginResponseSchema } from './contrato/auth.js';
 import { gastoIndiretoSchema, insumoSchema } from './contrato/catalog.js';
 import {
+  estoqueProdutoSchema,
   estoqueSchema,
   movimentacaoEstoqueSchema,
   producaoSchema,
@@ -43,11 +44,172 @@ const cadastroEmpresaSchema = jwtPayloadSchema
   .omit({ iat: true, exp: true })
   .extend(loginResponseSchema.shape);
 
-/** `EstoqueProduto` é novo (BE-12) e não tem schema no frontend. */
-const estoqueProdutoSchema = z.object({
-  receitaId: z.number().int(),
-  quantidadeDisponivel: z.number(),
-  dataAlteracao: z.iso.datetime().nullable(),
+// Campos e rotas do épico E7 (BE-24 a BE-32), aditivos e ainda sem schema no
+// frontend (FE-41 a FE-47). Quando o frontend os publicar, a cópia de
+// test/contrato/ os traz e estes schemas locais saem (docs/api.md).
+
+/** Campos novos do `Insumo` (BE-29, BE-32). */
+const insumoNovoSchema = insumoSchema.extend({
+  custoMedio: z.number(),
+  ultimoCusto: z.number(),
+  custoReposicao: z.number(),
+  precoMercado: z.number().nullable(),
+  precoMercadoData: z.iso.datetime().nullable(),
+  estoqueNegativo: z.boolean(),
+});
+
+/** `tipo` do `GastoIndireto` (BE-26), ao lado do `metodoRateio` legado. */
+const gastoNovoSchema = gastoIndiretoSchema.extend({
+  tipo: z.enum(['MENSAL', 'POR_UNIDADE', 'PERCENTUAL_VENDA']),
+});
+
+const parteSchema = z.object({ valor: z.number(), fracao: z.number() });
+
+/** Ficha técnica (BE-27), detalhe do custo e preço por canal (BE-28). */
+const receitaNovaSchema = receitaSchema.extend({
+  usoPorLote: z.number(),
+  embalagemPorUnidade: z.number(),
+  perdaPercentual: z.number(),
+  lucroPercentual: z.number().optional(),
+  custo: z.object({
+    ingredientesLote: z.number(),
+    gastosMensaisLote: z.number(),
+    ingredientes: z.number(),
+    gastosMensais: z.number(),
+    gastosPorUnidade: z.number(),
+    embalagem: z.number(),
+    perdas: z.number(),
+    unitario: z.number(),
+  }),
+  precos: z.array(
+    z.object({
+      canalId: z.number().int(),
+      canal: z.string(),
+      balcao: z.boolean(),
+      percentuais: z.number(),
+      preco: z.number().nullable(),
+      motivo: z.literal('PERCENTUAIS_ACIMA_DE_100').nullable(),
+      composicao: z
+        .object({
+          ingredientes: parteSchema,
+          gastosMensais: parteSchema,
+          gastosPorUnidade: parteSchema,
+          embalagem: parteSchema,
+          perdas: parteSchema,
+          imposto: parteSchema,
+          taxaCanal: parteSchema,
+          gastosPercentuais: parteSchema,
+          lucro: parteSchema,
+        })
+        .nullable(),
+    }),
+  ),
+});
+
+/** Canal e lucro real da venda (BE-30), ao lado da `margemRealizada` legada. */
+const vendaNovaSchema = vendaSchema.extend({
+  canalId: z.number().int().nullable(),
+  itens: z.array(
+    vendaSchema.shape.itens.element.extend({
+      lucroReal: z.number().nullable(),
+    }),
+  ),
+});
+
+/** `GET` e `PUT /configuracao-custos` (BE-24). */
+const configuracaoCustosSchema = z.object({
+  empresaId: z.number().int(),
+  baseRateio: z.enum(['FORNADAS', 'MINUTOS']),
+  capacidadeMensal: z.number(),
+  lucroPadrao: z.number(),
+  impostoPercentual: z.number(),
+  taxaMaquininha: z.number(),
+});
+
+/** `/canais` (BE-25). */
+const canalVendaSchema = z.object({
+  id: z.number().int(),
+  empresaId: z.number().int(),
+  nome: z.string(),
+  comissaoPercentual: z.number(),
+  ativo: z.boolean(),
+  balcao: z.boolean(),
+});
+
+/** `CompraInsumo` é novo (BE-29) e não tem schema no frontend. */
+const compraInsumoSchema = z.object({
+  id: z.number().int(),
+  insumoId: z.number().int(),
+  quantidade: z.number(),
+  valorTotal: z.number(),
+  custoUnitario: z.number(),
+  observacao: z.string().nullable(),
+  dataCompra: z.iso.datetime(),
+});
+
+/** Ponto de equilíbrio (BE-31), sem schema no frontend. */
+const motivoPontoSchema = z.enum(['SEM_VENDAS', 'MARGEM_NEGATIVA']).nullable();
+
+/** Campos novos da simulação (BE-31), aditivos ao schema do frontend. */
+const simulacaoNovaSchema = simulacaoCenarioSchema.extend({
+  canalId: z.number().int(),
+  canal: z.string(),
+  custoSemGastosMensais: z.number(),
+  percentuaisSemLucro: z.number(),
+  margemContribuicao: z.number(),
+  lucroPorUnidade: z.number(),
+  lucroReal: z.number(),
+  lucroMes: z.number(),
+  gastosMensais: z.number(),
+  pontoEquilibrio: z.object({
+    unidades: z.number().int().nullable(),
+    motivo: motivoPontoSchema,
+  }),
+});
+
+/** `GET /vendas/resumo` é novo (BE-31) e não tem schema no frontend. */
+const resumoVendasSchema = z.object({
+  dias: z.number().int(),
+  dataInicio: z.iso.datetime(),
+  vendas: z.number().int(),
+  receita: z.number(),
+  margemContribuicao: z.number(),
+  indiceMargemContribuicao: z.number().nullable(),
+  gastosMensais: z.number(),
+  pontoEquilibrio: z.object({
+    valor: z.number().nullable(),
+    motivo: motivoPontoSchema,
+  }),
+});
+
+/** `GET /alertas` é novo (BE-32) e não tem schema no frontend. */
+const alertasSchema = z.object({
+  estoqueNegativo: z.array(
+    z.object({
+      id: z.number().int(),
+      nome: z.string(),
+      saldo: z.number(),
+      unidade: z.string(),
+    }),
+  ),
+  precoDefasado: z.array(
+    z.object({
+      id: z.number().int(),
+      nome: z.string(),
+      unidade: z.string(),
+      custoMedio: z.number(),
+      custoReposicao: z.number(),
+      aumentoPercentual: z.number(),
+      receitas: z.array(
+        z.object({
+          id: z.number().int(),
+          nome: z.string(),
+          precoSugerido: z.number().nullable(),
+          precoComCustoMedio: z.number().nullable(),
+        }),
+      ),
+    }),
+  ),
 });
 
 const healthSchema = z.object({
@@ -178,6 +340,7 @@ describe('Contrato com o frontend (e2e)', () => {
         })
         .expect(201);
       const insumo = validar(insumoSchema, farinha.body);
+      validar(insumoNovoSchema, farinha.body);
       farinhaId = insumo.id;
       expect(insumo.empresaId).toBe(empresaA);
       expect(insumo.quantidadeDisponivel).toBe(10);
@@ -217,6 +380,27 @@ describe('Contrato com o frontend (e2e)', () => {
         .expect(200);
       expect(validar(insumoSchema, editado.body).valorPago).toBe(8);
 
+      // Compras (BE-29): rota nova, validada contra o schema local.
+      const compra = await comA('post', `/insumos/${acucarId}/compras`)
+        .send({ quantidade: 2, valorTotal: 20, observacao: 'Nota 1' })
+        .expect(201);
+      expect(validar(compraInsumoSchema, compra.body)).toMatchObject({
+        insumoId: acucarId,
+        quantidade: 2,
+        valorTotal: 20,
+        custoUnitario: 10,
+      });
+      const compras = await comA('get', `/insumos/${acucarId}/compras`).expect(
+        200,
+      );
+      const historico = validar(z.array(compraInsumoSchema), compras.body);
+      expect(historico.map((c) => c.id)).toContain(compra.body.id);
+      const comprado = await comA('get', `/insumos/${acucarId}`).expect(200);
+      expect(validar(insumoSchema, comprado.body)).toMatchObject({
+        quantidadeDisponivel: 2,
+        custoUnitario: 10,
+      });
+
       await comA('delete', `/insumos/${lixoId}`).expect(204);
       const sumiu = await comA('get', `/insumos/${lixoId}`).expect(404);
       expect(validar(erroSchema, sumiu.body).code).toBe(
@@ -234,11 +418,19 @@ describe('Contrato com o frontend (e2e)', () => {
         .expect(201);
       const gasto = validar(gastoIndiretoSchema, criado.body);
       gastoId = gasto.id;
-      expect(gasto.metodoRateio).toBe('PROPORCIONAL');
+      // BE-26: o metodo_rateio antigo vira tipo; a resposta mantém um
+      // metodoRateio válido para o schema e traz o tipo (campo aditivo).
+      expect(gasto.metodoRateio).toBe('FIXO');
+      expect(validar(gastoNovoSchema, criado.body).tipo).toBe('MENSAL');
 
       const outro = await comA('post', '/gastos-indiretos')
-        .send({ descricao: 'Temporário', valor: 1, metodo_rateio: 'FIXO' })
+        .send({
+          descricao: 'Temporário',
+          valor: 0.12,
+          tipo: 'PERCENTUAL_VENDA',
+        })
         .expect(201);
+      expect(outro.body).toMatchObject({ tipo: 'PERCENTUAL_VENDA' });
       const outroId = validar(gastoIndiretoSchema, outro.body).id;
 
       const lista = await comA('get', '/gastos-indiretos').expect(200);
@@ -274,7 +466,9 @@ describe('Contrato com o frontend (e2e)', () => {
       expect(receita.itens).toHaveLength(2);
       expect(receita.precoSugerido).toBeGreaterThan(0);
 
-      // Receita sem margem: os campos sem valor são omitidos, não `null`.
+      // BE-27: sem os campos da ficha técnica, a receita assume os padrões;
+      // sem lucro próprio, `lucroPercentual` é omitido (não `null`) e o
+      // preço sugerido usa o lucro padrão da empresa.
       const temporaria = await comA('post', '/receitas')
         .send({
           nome: 'Temporária',
@@ -284,14 +478,52 @@ describe('Contrato com o frontend (e2e)', () => {
         })
         .expect(201);
       const semMargem = validar(receitaSchema, temporaria.body);
-      expect(semMargem).not.toHaveProperty('margemLucro');
-      expect(semMargem).not.toHaveProperty('precoSugerido');
+      expect(temporaria.body).toMatchObject({
+        usoPorLote: 1,
+        embalagemPorUnidade: 0,
+        perdaPercentual: 0,
+      });
+      expect(temporaria.body).not.toHaveProperty('lucroPercentual');
+      expect(semMargem.precoSugerido).toBeGreaterThan(0);
+
+      const perdaTotal = await comA('post', '/receitas')
+        .send({
+          nome: 'Perda total',
+          rendimento: 1,
+          unidadeRendimento: 'UN',
+          perda_percentual: 1,
+          insumos: [{ insumo_id: acucarId, quantidade: 1 }],
+        })
+        .expect(400);
+      expect(validar(erroSchema, perdaTotal.body).code).toBe('DADOS_INVALIDOS');
 
       const lista = await comA('get', '/receitas').expect(200);
       expect(validar(z.array(receitaSchema), lista.body)).toHaveLength(2);
 
       const uma = await comA('get', `/receitas/${receitaId}`).expect(200);
-      validar(receitaSchema, uma.body);
+      const lida = validar(receitaSchema, uma.body);
+      // BE-28 (aditivos): detalhamento do custo e um preço por canal ativo;
+      // o `precoSugerido` é o do Balcão. Canal com percentuais ≥ 100% vem
+      // sem preço e com o motivo.
+      const caro = await comA('post', '/canais')
+        .send({ nome: 'Caro', comissaoPercentual: 0.9 })
+        .expect(201);
+      const comCanais = await comA('get', `/receitas/${receitaId}`).expect(200);
+      validar(receitaNovaSchema, comCanais.body);
+      expect(comCanais.body).toMatchObject({
+        custo: { unitario: lida.custoUnitario },
+        precos: [
+          { balcao: true, preco: lida.precoSugerido, motivo: null },
+          {
+            canal: 'Caro',
+            balcao: false,
+            preco: null,
+            motivo: 'PERCENTUAIS_ACIMA_DE_100',
+            composicao: null,
+          },
+        ],
+      });
+      await comA('delete', `/canais/${caro.body.id}`).expect(204);
 
       const editada = await comA('put', `/receitas/${receitaId}`)
         .send({ margem_lucro: 0.5 })
@@ -325,6 +557,25 @@ describe('Contrato com o frontend (e2e)', () => {
       const cenario = validar(simulacaoCenarioSchema, res.body);
       expect(cenario.precoVenda).toBe(2);
       expect(cenario.volume).toBe(100);
+      expect(validar(simulacaoNovaSchema, res.body).canal).toBe('Balcão');
+    });
+
+    it('POST /receitas/:id/simular pelo preço sugerido dá o lucro configurado', async () => {
+      const receita = await comA('get', `/receitas/${receitaId}`).expect(200);
+      const config = await comA('get', '/configuracao-custos').expect(200);
+      const lucro =
+        validar(
+          z.object({ lucroPercentual: z.number().optional() }),
+          receita.body,
+        ).lucroPercentual ??
+        validar(z.object({ lucroPadrao: z.number() }), config.body).lucroPadrao;
+      const res = await comA('post', `/receitas/${receitaId}/simular`)
+        .send({})
+        .expect(201);
+      expect(validar(simulacaoNovaSchema, res.body).lucroReal).toBeCloseTo(
+        lucro,
+        3,
+      );
     });
 
     it('POST /receitas/:id/preco-venda', async () => {
@@ -429,6 +680,9 @@ describe('Contrato com o frontend (e2e)', () => {
         .expect(201);
       const venda = validar(vendaSchema, criada.body);
       vendaConcluidaId = venda.id;
+      expect(validar(vendaNovaSchema, criada.body).itens[0]?.lucroReal).toEqual(
+        expect.any(Number),
+      );
       expect(venda.status).toBe('PENDENTE');
       expect(venda.total).toBe(12.5);
 
@@ -511,6 +765,18 @@ describe('Contrato com o frontend (e2e)', () => {
       const invalida = await comA('get', '/vendas?status=XYZ').expect(400);
       expect(validar(erroSchema, invalida.body).code).toBe('DADOS_INVALIDOS');
     });
+
+    it('GET /vendas/resumo traz o ponto de equilíbrio da empresa', async () => {
+      const res = await comA('get', '/vendas/resumo').expect(200);
+      const resumo = validar(resumoVendasSchema, res.body);
+      expect(resumo.dias).toBe(30);
+      expect(resumo.vendas).toBe(1);
+
+      const semVendas = await comB('get', '/vendas/resumo').expect(200);
+      expect(
+        validar(resumoVendasSchema, semVendas.body).pontoEquilibrio,
+      ).toEqual({ valor: null, motivo: 'SEM_VENDAS' });
+    });
   });
 
   describe('isolamento por empresa', () => {
@@ -535,6 +801,12 @@ describe('Contrato com o frontend (e2e)', () => {
         ['get', `/insumos/${farinhaId}`],
         ['patch', `/insumos/${farinhaId}`, { valorPago: 1 }],
         ['delete', `/insumos/${farinhaId}`],
+        ['get', `/insumos/${farinhaId}/compras`],
+        [
+          'post',
+          `/insumos/${farinhaId}/compras`,
+          { quantidade: 1, valorTotal: 1 },
+        ],
         ['get', `/gastos-indiretos/${gastoId}`],
         ['put', `/gastos-indiretos/${gastoId}`, { valor: 99 }],
         ['delete', `/gastos-indiretos/${gastoId}`],
@@ -657,6 +929,179 @@ describe('Contrato com o frontend (e2e)', () => {
     });
   });
 
+  describe('6. alertas', () => {
+    // Na empresa B, depois do isolamento, para não mexer nos saldos da A.
+    it('GET /alertas traz o estoque negativo e o preço defasado', async () => {
+      const vazio = await comA('get', '/alertas').expect(200);
+      expect(validar(alertasSchema, vazio.body)).toEqual({
+        estoqueNegativo: [],
+        precoDefasado: [],
+      });
+
+      // Farinha a R$ 4/kg com 1 kg; o pão usa 2 kg por lote.
+      const criada = await comB('post', '/insumos')
+        .send({
+          nome: 'Farinha B',
+          quantidadeBaseCusto: 1,
+          unidade: 'KG',
+          valorPago: 4,
+          quantidadeDisponivelInicial: 1,
+        })
+        .expect(201);
+      const farinhaB = validar(insumoSchema, criada.body).id;
+      expect(criada.body).toMatchObject({ estoqueNegativo: false });
+      const pao = await comB('post', '/receitas')
+        .send({
+          nome: 'Pão B',
+          rendimento: 40,
+          unidadeRendimento: 'UN',
+          insumos: [{ insumo_id: farinhaB, quantidade: 2 }],
+        })
+        .expect(201);
+      const paoId = validar(receitaSchema, pao.body).id;
+
+      // Produzir sem saldo é permitido e deixa o insumo negativo.
+      await comB('post', '/producoes')
+        .send({ receita_id: paoId, quantidade: 1 })
+        .expect(201);
+      const insumo = await comB('get', `/insumos/${farinhaB}`).expect(200);
+      expect(validar(insumoSchema, insumo.body)).toMatchObject({
+        quantidadeDisponivel: -1,
+      });
+      expect(insumo.body).toMatchObject({ estoqueNegativo: true });
+      const saldo = await comB('get', `/estoque/insumos/${farinhaB}`).expect(
+        200,
+      );
+      expect(validar(estoqueSchema, saldo.body)).toMatchObject({
+        quantidadeDisponivel: -1,
+      });
+      expect(saldo.body).toMatchObject({ estoqueNegativo: true });
+
+      // Reposição 25% acima do médio: R$ 5/kg informado no PATCH.
+      await comB('patch', `/insumos/${farinhaB}`)
+        .send({ valorPago: 5 })
+        .expect(200);
+      const novo = await comB('get', `/receitas/${paoId}`).expect(200);
+      const precoNovo = validar(receitaSchema, novo.body).precoSugerido;
+
+      const res = await comB('get', '/alertas').expect(200);
+      const alertas = validar(alertasSchema, res.body);
+      expect(alertas.estoqueNegativo).toEqual([
+        { id: farinhaB, nome: 'Farinha B', saldo: -1, unidade: 'KG' },
+      ]);
+      expect(alertas.precoDefasado).toEqual([
+        {
+          id: farinhaB,
+          nome: 'Farinha B',
+          unidade: 'KG',
+          custoMedio: 4,
+          custoReposicao: 5,
+          aumentoPercentual: 0.25,
+          receitas: [
+            {
+              id: paoId,
+              nome: 'Pão B',
+              precoSugerido: precoNovo,
+              precoComCustoMedio: expect.any(Number),
+            },
+          ],
+        },
+      ]);
+      expect(
+        alertas.precoDefasado[0]?.receitas[0]?.precoComCustoMedio,
+      ).toBeLessThan(precoNovo ?? 0);
+
+      // A empresa A não vê os alertas da B.
+      const daA = await comA('get', '/alertas').expect(200);
+      expect(validar(alertasSchema, daA.body).estoqueNegativo).toEqual([]);
+    });
+  });
+
+  describe('7. configuração de custos e canais', () => {
+    it('GET e PUT /configuracao-custos', async () => {
+      const padrao = await comA('get', '/configuracao-custos').expect(200);
+      expect(validar(configuracaoCustosSchema, padrao.body)).toEqual({
+        empresaId: empresaA,
+        baseRateio: 'FORNADAS',
+        capacidadeMensal: 40,
+        lucroPadrao: 0.15,
+        impostoPercentual: 0,
+        taxaMaquininha: 0,
+      });
+
+      // Campo omitido mantém o valor salvo.
+      const alterada = await comA('put', '/configuracao-custos')
+        .send({ baseRateio: 'MINUTOS', capacidadeMensal: 1200 })
+        .expect(200);
+      expect(validar(configuracaoCustosSchema, alterada.body)).toMatchObject({
+        baseRateio: 'MINUTOS',
+        capacidadeMensal: 1200,
+        lucroPadrao: 0.15,
+      });
+      const lida = await comA('get', '/configuracao-custos').expect(200);
+      expect(lida.body).toEqual(alterada.body);
+
+      const invalida = await comA('put', '/configuracao-custos')
+        .send({ capacidadeMensal: 0 })
+        .expect(400);
+      expect(validar(erroSchema, invalida.body).code).toBe('DADOS_INVALIDOS');
+      expect(invalida.body).toMatchObject({
+        details: [{ field: 'capacidadeMensal' }],
+      });
+
+      // A configuração é sempre a da empresa do token.
+      const daB = await comB('get', '/configuracao-custos').expect(200);
+      expect(validar(configuracaoCustosSchema, daB.body).capacidadeMensal).toBe(
+        40,
+      );
+    });
+
+    it('canais: GET, POST, PUT e DELETE, com o Balcão protegido', async () => {
+      const lista = await comA('get', '/canais').expect(200);
+      const canais = validar(z.array(canalVendaSchema), lista.body);
+      expect(canais.map((c) => [c.nome, c.ativo, c.balcao])).toEqual([
+        ['Balcão', true, true],
+        ['iFood', false, false],
+        ['iFood com entrega', false, false],
+      ]);
+      const balcaoId = canais[0]?.id ?? 0;
+
+      const criado = await comA('post', '/canais')
+        .send({ nome: 'Revenda', comissaoPercentual: 0.1 })
+        .expect(201);
+      const canal = validar(canalVendaSchema, criado.body);
+      expect(canal).toMatchObject({ ativo: true, balcao: false });
+
+      const editado = await comA('put', `/canais/${canal.id}`)
+        .send({ ativo: false })
+        .expect(200);
+      expect(validar(canalVendaSchema, editado.body)).toMatchObject({
+        nome: 'Revenda',
+        ativo: false,
+      });
+
+      const recusado = await comA('delete', `/canais/${balcaoId}`).expect(422);
+      expect(validar(erroSchema, recusado.body).code).toBe(
+        'CANAL_BALCAO_NAO_EXCLUIVEL',
+      );
+
+      const alheioPut = await comB('put', `/canais/${canal.id}`)
+        .send({ ativo: true })
+        .expect(404);
+      expect(validar(erroSchema, alheioPut.body).code).toBe(
+        'CANAL_VENDA_NAO_ENCONTRADO',
+      );
+      const alheioDelete = await comB('delete', `/canais/${canal.id}`).expect(
+        404,
+      );
+      expect(validar(erroSchema, alheioDelete.body).code).toBe(
+        'CANAL_VENDA_NAO_ENCONTRADO',
+      );
+
+      await comA('delete', `/canais/${canal.id}`).expect(204);
+    });
+  });
+
   describe('autenticação', () => {
     const protegidas: Rota[] = [
       ['get', '/insumos'],
@@ -688,9 +1133,17 @@ describe('Contrato com o frontend (e2e)', () => {
       ['get', '/producoes/1'],
       ['post', '/producoes'],
       ['get', '/vendas'],
+      ['get', '/vendas/resumo'],
       ['get', '/vendas/1'],
       ['post', '/vendas'],
       ['patch', '/vendas/1/status'],
+      ['get', '/alertas'],
+      ['get', '/configuracao-custos'],
+      ['put', '/configuracao-custos'],
+      ['get', '/canais'],
+      ['post', '/canais'],
+      ['put', '/canais/1'],
+      ['delete', '/canais/1'],
     ];
 
     it('rotas sem token respondem 401 NAO_AUTENTICADO', async () => {

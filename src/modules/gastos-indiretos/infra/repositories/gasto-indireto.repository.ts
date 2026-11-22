@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type {
   GastoIndireto,
-  MetodoRateio,
+  TipoGasto,
 } from '../../../../generated/prisma/client.js';
 import { PrismaService } from '../../../../shared/infra/database/prisma.service.js';
 import type { PrismaTransaction } from '../../../../shared/infra/database/prisma.transaction.js';
@@ -9,7 +9,7 @@ import type { PrismaTransaction } from '../../../../shared/infra/database/prisma
 interface GastoIndiretoData {
   descricao: string;
   valor: number;
-  metodoRateio: MetodoRateio;
+  tipo: TipoGasto;
 }
 
 @Injectable()

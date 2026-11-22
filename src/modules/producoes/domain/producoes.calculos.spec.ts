@@ -4,77 +4,115 @@ import {
   type GastoParaProducao,
 } from './producoes.calculos.js';
 
-// Números conferidos numa réplica literal de producao.service.ts (create) do
-// operations-service.
+// BE-30: consumo dos insumos ao custo médio + gastos mensais pelo uso de
+// forno, uma vez só. Pão francês da BE-28: ingredientes de R$ 3,305 por lote,
+// rendimento 50, gastos mensais de R$ 2.435 e capacidade de 100 fornadas.
+const P = 10;
 const aluguel: GastoParaProducao = {
   id: 1,
   descricao: 'Aluguel',
   valor: 1800,
-  metodoRateio: 'FIXO',
+  tipo: 'MENSAL',
 };
-const embalagem: GastoParaProducao = {
+const luz: GastoParaProducao = {
   id: 2,
-  descricao: 'Embalagem',
-  valor: 12.5,
-  metodoRateio: 'PROPORCIONAL',
+  descricao: 'Luz',
+  valor: 450,
+  tipo: 'MENSAL',
 };
-const etiqueta: GastoParaProducao = {
+const gas: GastoParaProducao = {
   id: 3,
-  descricao: 'Etiqueta',
-  valor: 0.015,
-  metodoRateio: 'POR_UNIDADE',
+  descricao: 'Gás',
+  valor: 185,
+  tipo: 'MENSAL',
 };
-const bolo = { custoProducao: 3884.7, rendimento: 12 };
+const saquinho: GastoParaProducao = {
+  id: 4,
+  descricao: 'Saquinho',
+  valor: 0.1,
+  tipo: 'POR_UNIDADE',
+};
+const comissao: GastoParaProducao = {
+  id: 5,
+  descricao: 'Comissão',
+  valor: 0.12,
+  tipo: 'PERCENTUAL_VENDA',
+};
+const pao = { ingredientesLote: 3.305, rendimento: 50, usoPorLote: 1 };
+const CAPACIDADE = 100;
 
-describe('calcularProducao', () => {
-  it('total de unidades, rateio de cada método, custo total e unitário', () => {
-    expect(calcularProducao(bolo, 3, [aluguel, embalagem, etiqueta])).toEqual({
-      totalUnidades: 36,
-      custoTotal: 13492.14, // 3884.7 × 3 + 1800 + 37.5 + 0.54
-      custoUnitario: 374.78,
+describe('calcularProducao (BE-30)', () => {
+  it('2 lotes do pão cobram os gastos mensais de 2 fornadas, uma vez só', () => {
+    expect(
+      calcularProducao(
+        pao,
+        2,
+        [aluguel, luz, gas, saquinho, comissao],
+        CAPACIDADE,
+      ),
+    ).toEqual({
+      totalUnidades: 100,
+      // 3,305 × 2 + 2.435 × 2 ÷ 100 = 6,61 + 48,70
+      custoTotal: expect.closeTo(55.31, P),
+      custoUnitario: expect.closeTo(0.5531, P),
       rateios: [
-        { gastoIndiretoId: 1, descricao: 'Aluguel', valorRateado: 1800 },
-        { gastoIndiretoId: 2, descricao: 'Embalagem', valorRateado: 37.5 },
-        { gastoIndiretoId: 3, descricao: 'Etiqueta', valorRateado: 0.54 },
+        { gastoIndiretoId: 1, descricao: 'Aluguel', valorRateado: 36 },
+        { gastoIndiretoId: 2, descricao: 'Luz', valorRateado: 9 },
+        {
+          gastoIndiretoId: 3,
+          descricao: 'Gás',
+          valorRateado: expect.closeTo(3.7, P),
+        },
       ],
     });
   });
 
-  it('lista de gastos vazia não rateia nada', () => {
-    expect(calcularProducao(bolo, 3, [])).toEqual({
-      totalUnidades: 36,
-      custoTotal: 11654.1,
-      custoUnitario: 323.73,
+  it('o custo total é ingredientes + rateios, sem somar o custo da receita de novo', () => {
+    const calculo = calcularProducao(pao, 2, [aluguel, luz, gas], CAPACIDADE);
+    const totalRateio = calculo.rateios.reduce(
+      (acc, r) => acc + r.valorRateado,
+      0,
+    );
+    expect(calculo.custoTotal).toBeCloseTo(3.305 * 2 + totalRateio, P);
+  });
+
+  it('o mensal usa o usoPorLote da receita', () => {
+    const calculo = calcularProducao(
+      { ...pao, usoPorLote: 2 },
+      3,
+      [aluguel],
+      CAPACIDADE,
+    );
+    // 1800 × 2 × 3 ÷ 100
+    expect(calculo.rateios[0].valorRateado).toBe(108);
+  });
+
+  it('POR_UNIDADE e PERCENTUAL_VENDA não geram rateio', () => {
+    expect(
+      calcularProducao(pao, 1, [saquinho, comissao], CAPACIDADE),
+    ).toMatchObject({
+      custoTotal: 3.305,
       rateios: [],
     });
   });
 
-  it('receita sem custo salvo usa 0 e fica só com o rateio', () => {
-    expect(
-      calcularProducao({ custoProducao: undefined, rendimento: 50 }, 2, [
-        etiqueta,
-      ]),
-    ).toMatchObject({
-      totalUnidades: 100,
-      custoTotal: 1.5,
-      custoUnitario: 0.01,
+  it('sem gastos, só os ingredientes', () => {
+    expect(calcularProducao(pao, 3, [], CAPACIDADE)).toEqual({
+      totalUnidades: 150,
+      custoTotal: expect.closeTo(9.915, P),
+      custoUnitario: expect.closeTo(0.0661, P),
+      rateios: [],
     });
-  });
-
-  it('arredonda com o round2 de toFixed', () => {
-    // 0.015 × 50 = 0.75; 9.92 + 0.75 = 10.67; 10.67 / 50 = 0.2134
-    expect(
-      calcularProducao({ custoProducao: 9.92, rendimento: 50 }, 1, [etiqueta]),
-    ).toMatchObject({ custoTotal: 10.67, custoUnitario: 0.21 });
-    // (1.005).toFixed(2) dá '1.00'
-    expect(
-      calcularProducao({ custoProducao: 1.005, rendimento: 1 }, 1, []),
-    ).toMatchObject({ custoTotal: 1, custoUnitario: 1 });
   });
 
   it('sem unidades, custo unitário 0', () => {
     expect(
-      calcularProducao({ custoProducao: 10, rendimento: 0 }, 2, []),
+      calcularProducao(
+        { ingredientesLote: 10, rendimento: 0 },
+        2,
+        [],
+        CAPACIDADE,
+      ),
     ).toMatchObject({ totalUnidades: 0, custoTotal: 20, custoUnitario: 0 });
   });
 });

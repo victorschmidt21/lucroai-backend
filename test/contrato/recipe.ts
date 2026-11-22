@@ -1,11 +1,11 @@
-// Cópia de lucroai-frontend/src/shared/api/contracts/recipe.ts (commit cb35609),
-// copiada em 2026-11-20. Não edite: atualize pelo procedimento de docs/api.md.
+// Cópia de lucroai-frontend/src/shared/api/contracts/recipe.ts (commit b4ebbd9),
+// copiada em 2026-11-22. Não edite: atualize pelo procedimento de docs/api.md.
 // Única mudança: imports relativos com `.js` (ESM nodenext).
 
 import { z } from 'zod';
 import { unidadeMedidaSchema } from './enums.js';
 
-// recipe-service. Origem: `services/recipe-service/src/modules/`.
+// Receitas, custo e simulação. Origem: `lucroai-backend` (monolito), `src/modules/receitas/`.
 
 /**
  * `receitas/domain/models/receita.entity.ts`. O repositório converte `null` em

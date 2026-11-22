@@ -38,13 +38,16 @@ Cada tabela pertence a **um** módulo, e só ele lê e escreve nela pelo Prisma.
 
 | Módulo | Tabelas (models) | Responsabilidade | Depende de | Issues |
 | --- | --- | --- | --- | --- |
-| `auth` | `Empresa`, `Usuario` | cadastro de empresa, login e JWT (assinado com o `JwtService` do `JwtAuthModule`); não exporta service | — | BE-06 |
-| `estoque` | `Estoque`, `MovimentacaoEstoque`, `EstoqueProdutoAcabado`, `MovimentacaoProdutoAcabado` | saldo e histórico de insumos e de produto acabado; exporta `EstoqueService` (`criarRegistroInicial` e `saldosPorInsumo` desde a BE-07; `baixarPorProducao(itens, lotes, producaoId, empresaId, tx)` desde a BE-11) e `EstoqueProdutoAcabadoService` (`entradaPorProducao(receitaId, totalUnidades, producaoId, empresaId, tx)` e `saidaPorVenda(receitaId, quantidade, vendaId, empresaId, tx)` desde a BE-12) | — | BE-07, BE-11, BE-12 |
-| `insumos` | `Insumo` | cadastro de insumos e custo unitário; cria o estoque inicial na mesma transação; exporta `InsumoService` (`buscarVariosDaEmpresa` desde a BE-09) | `estoque` | BE-07 |
-| `gastos-indiretos` | `GastoIndireto` | cadastro de gastos e cálculo do rateio (`calcularValorRateado`); exporta `GastoIndiretoService` (`listarPorEmpresa` e `buscarVariosDaEmpresa`) | — | BE-08 |
-| `receitas` | `Receita`, `ItemReceita` | receitas, custo para 1 ou N lotes (`calcularCustoReceita`), simulação (`simularCenario`) e preço de venda (`calcularPrecoVenda`), sem gravar; exporta `ReceitaService` (`buscarDaEmpresa`) | `insumos`, `gastos-indiretos` | BE-09, BE-10 |
-| `producoes` | `Producao`, `RateioProducao` | produção com rateio (`calcularProducao`), baixa de insumos e entrada de produto acabado, numa transação só; não exporta service | `receitas`, `gastos-indiretos`, `estoque` | BE-12 |
-| `vendas` | `Venda`, `ItemVenda` | vendas com a entidade `Venda` (total, margem e transições de status) e conclusão com baixa de produto acabado (`saidaPorVenda`) na mesma transação; não exporta service | `receitas`, `estoque` | BE-13 |
+| `auth` | `Empresa`, `Usuario` | cadastro de empresa (com a configuração de custos e os canais de venda padrão na mesma transação), login e JWT (assinado com o `JwtService` do `JwtAuthModule`); não exporta service | `configuracao-custos`, `canais` | BE-06, BE-24, BE-25 |
+| `estoque` | `Estoque`, `MovimentacaoEstoque`, `EstoqueProdutoAcabado`, `MovimentacaoProdutoAcabado` | saldo e histórico de insumos e de produto acabado; exporta `EstoqueService` (`criarRegistroInicial` e `saldosPorInsumo` desde a BE-07; `baixarPorProducao(itens, lotes, producaoId, empresaId, tx)` desde a BE-11; `registrarEntradaPorCompra(insumoId, quantidade, compraId, observacao, empresaId, tx)` desde a BE-29) e `EstoqueProdutoAcabadoService` (`entradaPorProducao(receitaId, totalUnidades, producaoId, empresaId, tx)` e `saidaPorVenda(receitaId, quantidade, vendaId, empresaId, tx)` desde a BE-12); regra `estoqueNegativo` para a indicação visual (BE-32) | — | BE-07, BE-11, BE-12, BE-32 |
+| `insumos` | `Insumo`, `CompraInsumo` | cadastro de insumos; compras (`POST`/`GET /insumos/:id/compras`), com entrada no estoque e custo médio móvel (`calcularCustoMedio`), e custo de reposição (`calcularCustoReposicao`, usado pelas receitas); o cadastro cria a compra inicial e o estoque inicial na mesma transação; preço defasado (`calcularAumentoReposicao`, `precoDefasado`, BE-32); exporta `InsumoService` (`buscarVariosDaEmpresa` desde a BE-09 e `listarComSaldo` desde a BE-32) | `estoque` | BE-07, BE-29, BE-32 |
+| `configuracao-custos` | `ConfiguracaoCustos` | configuração de custos da empresa (base de rateio, capacidade mensal, lucro, imposto e maquininha), com os padrões e a validação (`validarConfiguracaoCustos`); exporta `ConfiguracaoCustosService` (`criarPadrao(empresaId, tx)` e `buscarDaEmpresa(empresaId, tx?)`) | — | BE-24, BE-26 |
+| `canais` | `CanalVenda` | canais de venda com comissão (Balcão, iFood…), CRUD em `/canais`, com os padrões (`CANAIS_PADRAO`), a regra do Balcão (`garantirCanalExcluivel`) e a taxa no preço (`taxaDoCanal`); exporta `CanalVendaService` (`criarPadrao(empresaId, tx)`, `listarAtivosDaEmpresa(empresaId, tx?)` e, desde a BE-30, `buscarParaVenda(canalId?, empresaId)`, com o Balcão como padrão) | — | BE-25, BE-28, BE-30 |
+| `gastos-indiretos` | `GastoIndireto` | cadastro de gastos por tipo (`MENSAL`, `POR_UNIDADE`, `PERCENTUAL_VENDA`), validação por tipo (`validarGasto`) e a parte de cada gasto no custo (`calcularGastoNoCusto`); exporta `GastoIndiretoService` (`listarPorEmpresa` e `buscarVariosDaEmpresa`) | — | BE-08, BE-26 |
+| `receitas` | `Receita`, `ItemReceita` | receitas com a ficha técnica (`validarFichaTecnica`); custo para 1 ou N lotes, com o custo de reposição dos insumos (BE-29) (`calcularCustoReceita`, com embalagem e perda) e preço por canal ativo (`calcularPrecoNoCanal`) e percentuais sem o lucro (`calcularPercentuaisSemLucro`, BE-30), calculados na leitura e nunca gravados; simulação por canal com lucro real e ponto de equilíbrio do produto (`simularCenario`, `calcularMargemContribuicao`, `calcularPontoEquilibrioProduto`, BE-31) e preço de venda (`calcularPrecoVenda`), sem gravar; exporta `ReceitaService` (`buscarDaEmpresa`, com o custo de 1 lote ao custo médio dos insumos e a base do preço, BE-30, e `listarPrecosSugeridos`, o preço no Balcão com a reposição e com o médio, BE-32) | `insumos`, `gastos-indiretos`, `configuracao-custos`, `canais` | BE-09, BE-10, BE-26, BE-27, BE-28, BE-30, BE-31 |
+| `producoes` | `Producao`, `RateioProducao` | produção com o custo dos ingredientes ao custo médio e o rateio dos gastos mensais, uma vez só (`calcularProducao`), baixa de insumos e entrada de produto acabado, numa transação só; não exporta service | `receitas`, `gastos-indiretos`, `estoque`, `configuracao-custos` | BE-12, BE-26, BE-30 |
+| `alertas` | — | `GET /alertas` (BE-32): insumos com estoque negativo (`estoqueNegativo` de `estoque`) e com preço defasado, com as receitas afetadas e o novo preço no Balcão (`alertasDeEstoqueNegativo` e `alertasDePrecoDefasado` em `alertas.calculos.ts`); só lê, pelos services `InsumoService.listarComSaldo` e `ReceitaService.listarPrecosSugeridos`; não exporta service | `insumos`, `receitas`, `estoque` (só a função `estoqueNegativo`) | BE-32 |
+| `vendas` | `Venda`, `ItemVenda` | vendas por canal com a entidade `Venda` (total, margem, lucro real e transições de status) e conclusão com baixa de produto acabado (`saidaPorVenda`) na mesma transação; resumo do painel com o ponto de equilíbrio da empresa (`GET /vendas/resumo`, `calcularPontoEquilibrioEmpresa` em `vendas.calculos.ts`, BE-31); não exporta service | `receitas`, `estoque`, `canais`, `gastos-indiretos` | BE-13, BE-30, BE-31 |
 
 ### Tabelas e donos
 
@@ -54,7 +57,10 @@ Schema em `prisma/schema.prisma`, migration inicial `init` (BE-05). Toda tabela 
 | --- | --- | --- |
 | `empresa` (`Empresa`) | `auth` | — |
 | `usuario` (`Usuario`) | `auth` | `empresa_id` (`CASCADE`) |
+| `configuracao_custos` (`ConfiguracaoCustos`) | `configuracao-custos` | `empresa_id` (único) |
+| `canal_venda` (`CanalVenda`) | `canais` | `empresa_id` |
 | `insumo` (`Insumo`) | `insumos` | `empresa_id` |
+| `compra_insumo` (`CompraInsumo`) | `insumos` | `empresa_id`, `insumo_id` (`CASCADE`) |
 | `gasto_indireto` (`GastoIndireto`) | `gastos-indiretos` | `empresa_id` |
 | `receita` (`Receita`) | `receitas` | `empresa_id` |
 | `item_receita` (`ItemReceita`) | `receitas` | `receita_id` (`CASCADE`), `insumo_id` (`RESTRICT` → 409 `INSUMO_EM_USO`) |
@@ -64,10 +70,10 @@ Schema em `prisma/schema.prisma`, migration inicial `init` (BE-05). Toda tabela 
 | `movimentacao_produto_acabado` (`MovimentacaoProdutoAcabado`) | `estoque` | `empresa_id`, `receita_id` (`CASCADE`) |
 | `producao` (`Producao`) | `producoes` | `empresa_id`, `receita_id` (`RESTRICT`) |
 | `rateio_producao` (`RateioProducao`) | `producoes` | `producao_id` (`CASCADE`), `gasto_indireto_id` **sem FK** (BE-12: o id fica depois da exclusão do gasto, como nos microsserviços, porque o frontend espera um inteiro; o rateio guarda a `descricao` do gasto) |
-| `venda` (`Venda`) | `vendas` | `empresa_id` |
+| `venda` (`Venda`) | `vendas` | `empresa_id`, `canal_id` (`SET NULL`, BE-30: excluir o canal não apaga as vendas) |
 | `item_venda` (`ItemVenda`) | `vendas` | `venda_id` (`CASCADE`), `receita_id` (`RESTRICT`) |
 
-`empresa_id` sem indicação é `RESTRICT` (padrão do Prisma): excluir empresa não é uma funcionalidade. A exclusão de insumo leva junto o saldo e as movimentações de estoque dele, e a de receita leva o saldo e as movimentações de produto acabado (quando não há produção nem venda, que a bloqueiam).
+`empresa_id` sem indicação é `RESTRICT` (padrão do Prisma): excluir empresa não é uma funcionalidade. A exclusão de insumo leva junto o saldo, as movimentações de estoque e as compras dele, e a de receita leva o saldo e as movimentações de produto acabado (quando não há produção nem venda, que a bloqueiam).
 
 **Sem ciclos.** Se A depende de B, B não depende de A. O `estoque` não depende de `insumos`: ele confere a empresa pelo `empresa_id` do próprio registro de estoque (BE-05). Ao criar um módulo ou uma dependência, atualize esta tabela no mesmo PR.
 
@@ -90,7 +96,7 @@ src/modules/<modulo>/
     └── guards/<nome>.guard.ts       # só quando o módulo precisa de guard próprio (ex.: auth/AuthThrottlerGuard)
 ```
 
-Só o módulo `vendas` tem também `domain/venda.entity.ts` (e o `venda.entity.spec.ts`). Módulo com várias tabelas (ex.: `estoque`) tem um repositório e, se fizer sentido, um service por tabela principal, nas mesmas pastas. Não crie submódulos, interfaces de repositório, tokens `Symbol` nem `OVERVIEW.md`.
+Só o módulo `vendas` tem também `domain/venda.entity.ts` (e o `venda.entity.spec.ts`), ao lado do `vendas.calculos.ts` (BE-31). Módulo com várias tabelas (ex.: `estoque`) tem um repositório e, se fizer sentido, um service por tabela principal, nas mesmas pastas. Módulo sem tabela (`alertas`, BE-32) não tem `infra/repositories/`: só lê pelos services de outros módulos. Não crie submódulos, interfaces de repositório, tokens `Symbol` nem `OVERVIEW.md`.
 
 ### Camadas
 
@@ -116,7 +122,7 @@ Só o módulo `vendas` tem também `domain/venda.entity.ts` (e o `venda.entity.s
 
 - Um por entidade principal (`GastoIndiretoService`).
 - CRUD com nomes em inglês (`list`, `findById`, `create`, `update`, `delete`); ações e métodos para outros módulos em português (`concluir`, `buscarVariosDaEmpresa`, `baixarPorProducao`).
-- Recebe DTOs validados e o `empresaId` do token, e devolve DTOs de saída. Nunca devolve o registro do Prisma.
+- Recebe DTOs validados e o `empresaId` do token, e devolve DTOs de saída. Nunca devolve o registro do Prisma para o controller. **Exceção (BE-23):** um método para outro módulo cujos valores entram em outra conta devolve o registro, sem o arredondamento do DTO de saída (`InsumoService.buscarVariosDaEmpresa`, `ReceitaService.buscarDaEmpresa`).
 - Lança só os erros de `src/shared/domain/errors/domain.error.ts`.
 - Abre transação com `TransactionManager.run()` quando grava em mais de uma tabela ou em mais de um módulo.
 
@@ -129,7 +135,7 @@ Só o módulo `vendas` tem também `domain/venda.entity.ts` (e o `venda.entity.s
 ## Comunicação entre módulos
 
 1. **Service exportado.** O módulo A coloca `BModule` em `imports` e injeta um service listado em `exports` do `BModule`. Esses métodos devolvem DTOs.
-2. **Funções puras.** A pode importar `src/modules/<b>/domain/<b>.calculos.ts` de um módulo do qual depende (ex.: `receitas` e `producoes` usam `calcularValorRateado` de `gastos-indiretos`). É o único arquivo interno de outro módulo que se pode importar.
+2. **Funções puras.** A pode importar `src/modules/<b>/domain/<b>.calculos.ts` de um módulo do qual depende (ex.: `receitas` e `producoes` usam `calcularGastoNoCusto` de `gastos-indiretos`, e `receitas` usa `taxaDoCanal` de `canais`, e `vendas` usa `calcularPercentuaisSemLucro`, `calcularMargemContribuicao` e `somarGastosMensais` de `receitas`, e `alertas` usa `estoqueNegativo` de `estoque` e `precoDefasado` de `insumos`). É o único arquivo interno de outro módulo que se pode importar.
 3. **Transação.** Quem orquestra abre a transação e passa o `tx` aos services dos outros módulos, que o repassam aos repositórios. Tudo ou nada:
 
    ```ts
@@ -172,7 +178,7 @@ Qualquer exceção → AllExceptionsFilter → { statusCode, code, message, deta
 ## Banco
 
 - Um schema só, `prisma/schema.prisma` (BE-05), com chaves estrangeiras reais entre as tabelas. Nomes de tabela e coluna em `snake_case` com `@@map`/`@map`, iguais aos dos microsserviços; models em `PascalCase` singular e campos em `camelCase`.
-- Ids `Int @default(autoincrement())`; valores e quantidades `Float`, arredondados antes de gravar ([business-rules.md](business-rules.md#arredondamento)).
+- Ids `Int @default(autoincrement())`; valores e quantidades `Float`. Custo e preço são gravados sem arredondar e arredondados só nos DTOs de resposta (BE-23, [business-rules.md](business-rules.md#arredondamento)).
 - `empresa_id` em toda tabela de negócio, com índice.
 - Migration nova: `npm run db:migrate -- --name <verbo>_<descricao>`. Nunca edite uma migration já mergeada nem `src/generated/`.
 - Transações: `TransactionManager.run(async (tx) => ...)` em `src/shared/infra/database/transaction.manager.ts`, injetável em qualquer service (o `PrismaModule` é global e o exporta). O tipo do `tx` é `PrismaTransaction` (`prisma.transaction.ts`).
@@ -183,32 +189,44 @@ Qualquer exceção → AllExceptionsFilter → { statusCode, code, message, deta
 
 ### `domain/gastos-indiretos.calculos.ts`
 
+Resumo; o arquivo real tem também a compatibilidade com o `metodo_rateio` antigo (`tipoDoMetodoRateio`, `metodoRateioDoTipo` e `resolverTipoGasto`, BE-26).
+
 ```ts
-import { round2 } from '../../../shared/domain/arredondamento.js';
+import { InvalidInputError } from '../../../shared/domain/errors/domain.error.js';
 
-export type MetodoRateio = 'FIXO' | 'PROPORCIONAL' | 'POR_UNIDADE';
+export type TipoGasto = 'MENSAL' | 'POR_UNIDADE' | 'PERCENTUAL_VENDA';
 
-export interface GastoParaRateio {
+export interface GastoParaCusto {
   valor: number;
-  metodoRateio: MetodoRateio;
+  tipo: TipoGasto;
 }
 
-/**
- * Valor de um gasto rateado para `lotes` lotes que rendem `totalUnidades`.
- * Origem: producao.service.ts (calcularValorRateado) do operations-service.
- */
-export function calcularValorRateado(
-  gasto: GastoParaRateio,
-  lotes: number,
-  totalUnidades: number,
-): number {
-  switch (gasto.metodoRateio) {
-    case 'FIXO':
-      return round2(gasto.valor);
-    case 'PROPORCIONAL':
-      return round2(gasto.valor * lotes);
+export interface UsoDoGasto {
+  lotes: number;
+  totalUnidades: number;
+  capacidadeMensal: number;
+  /** Fornadas ou minutos de 1 lote: o `usoPorLote` da receita (BE-27); omitido, 1. */
+  usoPorLote?: number;
+}
+
+/** Parte de um gasto no custo de `lotes` lotes (BE-26), sem arredondar (BE-23). */
+export function calcularGastoNoCusto(gasto: GastoParaCusto, uso: UsoDoGasto): number {
+  switch (gasto.tipo) {
+    case 'MENSAL':
+      return (gasto.valor * (uso.usoPorLote ?? 1) * uso.lotes) / uso.capacidadeMensal;
     case 'POR_UNIDADE':
-      return round2(gasto.valor * totalUnidades);
+      return gasto.valor * uso.totalUnidades;
+    case 'PERCENTUAL_VENDA':
+      return 0; // fração do preço, não custo (BE-28)
+  }
+}
+
+/** `PERCENTUAL_VENDA` é fração do preço: 0 ≤ valor < 1. */
+export function validarGasto(gasto: GastoParaCusto): void {
+  if (gasto.tipo === 'PERCENTUAL_VENDA' && (gasto.valor < 0 || gasto.valor >= 1)) {
+    throw new InvalidInputError('DADOS_INVALIDOS', 'Os dados enviados são inválidos', [
+      { field: 'valor', messages: ['valor de um gasto PERCENTUAL_VENDA deve ser ...'] },
+    ]);
   }
 }
 ```
@@ -217,20 +235,23 @@ export function calcularValorRateado(
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import { calcularValorRateado } from './gastos-indiretos.calculos.js';
+import { calcularGastoNoCusto, validarGasto } from './gastos-indiretos.calculos.js';
 
-describe('calcularValorRateado', () => {
-  it('FIXO não depende de lotes nem de unidades', () => {
-    expect(calcularValorRateado({ valor: 1800, metodoRateio: 'FIXO' }, 3, 150)).toBe(1800);
+const uso = { lotes: 1, totalUnidades: 50, capacidadeMensal: 40 };
+
+describe('calcularGastoNoCusto', () => {
+  it('MENSAL de R$ 1.800 não entra inteiro num lote: divide pela capacidade', () => {
+    expect(calcularGastoNoCusto({ valor: 1800, tipo: 'MENSAL' }, uso)).toBe(45);
   });
 
-  it('PROPORCIONAL multiplica pelos lotes', () => {
-    expect(calcularValorRateado({ valor: 12.5, metodoRateio: 'PROPORCIONAL' }, 3, 150)).toBe(37.5);
+  it('POR_UNIDADE é valor por unidade: multiplica pelo total de unidades', () => {
+    expect(calcularGastoNoCusto({ valor: 0.25, tipo: 'POR_UNIDADE' }, uso)).toBe(12.5);
   });
+});
 
-  it('POR_UNIDADE multiplica pelo total de unidades, com o round2 de toFixed', () => {
-    // 0.015 × 101 = 1.515 no ponto flutuante, e toFixed(2) dá '1.51'
-    expect(calcularValorRateado({ valor: 0.015, metodoRateio: 'POR_UNIDADE' }, 1, 101)).toBe(1.51);
+describe('validarGasto', () => {
+  it('PERCENTUAL_VENDA de 12 (em vez de 0.12) → 400', () => {
+    expect(() => validarGasto({ valor: 12, tipo: 'PERCENTUAL_VENDA' })).toThrow();
   });
 });
 ```
@@ -239,8 +260,9 @@ describe('calcularValorRateado', () => {
 
 ```ts
 import { Transform } from 'class-transformer';
-import { IsEnum, IsNotEmpty, IsNumber, IsString, MaxLength, Min } from 'class-validator';
-import { MetodoRateio } from '../../../../generated/prisma/client.js';
+import { IsEnum, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, MaxLength, Min, ValidateIf } from 'class-validator';
+import { TipoGasto } from '../../../../generated/prisma/client.js';
+import { METODOS_RATEIO, type MetodoRateio } from '../../domain/gastos-indiretos.calculos.js';
 
 export class CreateGastoIndiretoDto {
   /** @example 'Aluguel' */
@@ -255,9 +277,15 @@ export class CreateGastoIndiretoDto {
   @Min(0)
   valor: number;
 
-  /** Nome em snake_case, como no contrato do frontend. @example 'FIXO' */
-  @IsEnum(MetodoRateio)
-  metodo_rateio: MetodoRateio;
+  /** Obrigatório se `metodo_rateio` não vier. @example 'MENSAL' */
+  @ValidateIf((dto: CreateGastoIndiretoDto) => dto.metodo_rateio === undefined)
+  @IsEnum(TipoGasto)
+  tipo?: TipoGasto;
+
+  /** Legado, em snake_case como no contrato do frontend. @deprecated Use `tipo`. @example 'FIXO' */
+  @IsOptional()
+  @IsIn(METODOS_RATEIO)
+  metodo_rateio?: MetodoRateio;
 }
 ```
 
@@ -273,7 +301,8 @@ export class UpdateGastoIndiretoDto extends PartialType(CreateGastoIndiretoDto) 
 ### `application/dto/gasto-indireto.dto.ts`
 
 ```ts
-import type { GastoIndireto, MetodoRateio } from '../../../../generated/prisma/client.js';
+import type { GastoIndireto, TipoGasto } from '../../../../generated/prisma/client.js';
+import { metodoRateioDoTipo, type MetodoRateio } from '../../domain/gastos-indiretos.calculos.js';
 
 export class GastoIndiretoDto {
   /** @example 1 */
@@ -284,7 +313,9 @@ export class GastoIndiretoDto {
   descricao: string;
   /** @example 1800 */
   valor: number;
-  /** @example 'FIXO' */
+  /** @example 'MENSAL' */
+  tipo: TipoGasto;
+  /** Legado, derivado do `tipo`. @deprecated Use `tipo`. @example 'FIXO' */
   metodoRateio: MetodoRateio;
 }
 
@@ -294,7 +325,8 @@ export function toGastoIndiretoDto(row: GastoIndireto): GastoIndiretoDto {
     empresaId: row.empresaId,
     descricao: row.descricao,
     valor: row.valor,
-    metodoRateio: row.metodoRateio,
+    tipo: row.tipo,
+    metodoRateio: metodoRateioDoTipo(row.tipo),
   };
 }
 ```
@@ -303,14 +335,14 @@ export function toGastoIndiretoDto(row: GastoIndireto): GastoIndiretoDto {
 
 ```ts
 import { Injectable } from '@nestjs/common';
-import type { GastoIndireto, MetodoRateio } from '../../../../generated/prisma/client.js';
+import type { GastoIndireto, TipoGasto } from '../../../../generated/prisma/client.js';
 import { PrismaService } from '../../../../shared/infra/database/prisma.service.js';
 import type { PrismaTransaction } from '../../../../shared/infra/database/prisma.transaction.js';
 
 interface GastoIndiretoData {
   descricao: string;
   valor: number;
-  metodoRateio: MetodoRateio;
+  tipo: TipoGasto;
 }
 
 @Injectable()
@@ -356,6 +388,7 @@ import { Injectable } from '@nestjs/common';
 import type { GastoIndireto } from '../../../../generated/prisma/client.js';
 import { NotFoundError } from '../../../../shared/domain/errors/domain.error.js';
 import type { PrismaTransaction } from '../../../../shared/infra/database/prisma.transaction.js';
+import { resolverTipoGasto, validarGasto } from '../../domain/gastos-indiretos.calculos.js';
 import { GastoIndiretoRepository } from '../../infra/repositories/gasto-indireto.repository.js';
 import type { CreateGastoIndiretoDto } from '../dto/create-gasto-indireto.dto.js';
 import { type GastoIndiretoDto, toGastoIndiretoDto } from '../dto/gasto-indireto.dto.js';
@@ -375,21 +408,17 @@ export class GastoIndiretoService {
   }
 
   async create(dto: CreateGastoIndiretoDto, empresaId: number): Promise<GastoIndiretoDto> {
-    const row = await this.repository.create(empresaId, {
-      descricao: dto.descricao,
-      valor: dto.valor,
-      metodoRateio: dto.metodo_rateio,
-    });
+    const gasto = { valor: dto.valor, tipo: resolverTipoGasto(dto) };
+    validarGasto(gasto);
+    const row = await this.repository.create(empresaId, { descricao: dto.descricao, ...gasto });
     return toGastoIndiretoDto(row);
   }
 
   async update(id: number, dto: UpdateGastoIndiretoDto, empresaId: number): Promise<GastoIndiretoDto> {
-    await this.getOrFail(id, empresaId);
-    const row = await this.repository.update(id, {
-      descricao: dto.descricao,
-      valor: dto.valor,
-      metodoRateio: dto.metodo_rateio,
-    });
+    const atual = await this.getOrFail(id, empresaId);
+    const gasto = { valor: dto.valor ?? atual.valor, tipo: resolverTipoGasto(dto, atual.tipo) };
+    validarGasto(gasto);
+    const row = await this.repository.update(id, { descricao: dto.descricao, ...gasto });
     return toGastoIndiretoDto(row);
   }
 

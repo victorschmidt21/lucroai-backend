@@ -4,6 +4,7 @@ import {
   calcularQuantidadeBaixa,
   calcularSaidaProdutoAcabado,
   calcularSaldoAposMovimentacao,
+  estoqueNegativo,
 } from './estoque.calculos.js';
 
 describe('calcularSaldoAposMovimentacao', () => {
@@ -59,5 +60,17 @@ describe('calcularSaidaProdutoAcabado', () => {
     } catch (erro) {
       expect(erro).toMatchObject({ code: 'ESTOQUE_INSUFICIENTE' });
     }
+  });
+});
+
+describe('estoqueNegativo', () => {
+  it('saldo abaixo de zero é negativo', () => {
+    expect(estoqueNegativo(-0.5)).toBe(true);
+    expect(estoqueNegativo(-150)).toBe(true);
+  });
+
+  it('saldo zero ou positivo não é negativo', () => {
+    expect(estoqueNegativo(0)).toBe(false);
+    expect(estoqueNegativo(1500)).toBe(false);
   });
 });

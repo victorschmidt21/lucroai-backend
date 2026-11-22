@@ -16,7 +16,7 @@ export class MovimentacaoEstoqueDto {
   origem: OrigemMovimentacaoEstoque;
   /** @example 500 */
   quantidade: number;
-  /** Id da produção nas saídas por produção; `null` na compra. @example null */
+  /** Id da produção nas saídas por produção ou da compra (BE-29); `null` na entrada manual. @example null */
   referenciaId: number | null;
   /** Novo (BE-11, lacuna 22); `null` sem observação. @example 'Nota 123' */
   observacao: string | null;

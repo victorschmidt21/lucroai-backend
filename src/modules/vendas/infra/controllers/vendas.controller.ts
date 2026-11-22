@@ -13,6 +13,7 @@ import { CurrentUser } from '../../../../shared/infra/auth/current-user.decorato
 import type { UsuarioAutenticado } from '../../../../shared/infra/auth/usuario-autenticado.js';
 import { CreateVendaDto } from '../../application/dto/create-venda.dto.js';
 import { ListVendasQueryDto } from '../../application/dto/list-vendas-query.dto.js';
+import type { ResumoVendasDto } from '../../application/dto/resumo-vendas.dto.js';
 import { UpdateVendaStatusDto } from '../../application/dto/update-venda-status.dto.js';
 import type { VendaDto } from '../../application/dto/venda.dto.js';
 import { VendaService } from '../../application/services/venda.service.js';
@@ -30,6 +31,12 @@ export class VendasController {
     @CurrentUser() usuario: UsuarioAutenticado,
   ): Promise<VendaDto[]> {
     return this.service.list(query, usuario.empresa.id);
+  }
+
+  /** Resumo do painel: ponto de equilíbrio da empresa com as vendas concluídas dos últimos 30 dias */
+  @Get('resumo')
+  resumo(@CurrentUser() usuario: UsuarioAutenticado): Promise<ResumoVendasDto> {
+    return this.service.resumo(usuario.empresa.id);
   }
 
   /** Detalha uma venda */
