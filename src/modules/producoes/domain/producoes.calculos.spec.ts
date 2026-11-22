@@ -59,6 +59,18 @@ describe('calcularProducao', () => {
     expect(calculo.custoTotal).toBe(45);
   });
 
+  it('o mensal usa o usoPorLote da receita (BE-27)', () => {
+    const calculo = calcularProducao(
+      { custoProducao: 0, rendimento: 50, usoPorLote: 2 },
+      3,
+      [aluguel, etiqueta],
+      CAPACIDADE,
+    );
+    // 1800 × 2 × 3 ÷ 40; a etiqueta segue por unidade (0.015 × 150)
+    expect(calculo.rateios[0].valorRateado).toBe(270);
+    expect(calculo.rateios[1].valorRateado).toBeCloseTo(2.25, P);
+  });
+
   it('PERCENTUAL_VENDA não é custo e não gera rateio', () => {
     expect(calcularProducao(bolo, 1, [comissao], CAPACIDADE)).toMatchObject({
       custoTotal: 3884.7,

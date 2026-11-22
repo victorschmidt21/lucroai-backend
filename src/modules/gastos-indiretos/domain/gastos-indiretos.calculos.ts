@@ -25,8 +25,8 @@ export interface UsoDoGasto {
   /** Da configuração de custos da empresa (BE-24), sempre > 0. */
   capacidadeMensal: number;
   /**
-   * Fornadas (ou minutos de forno) que um lote ocupa. Até a ficha técnica
-   * ganhar o campo (BE-27), todo lote ocupa 1.
+   * Fornadas (ou minutos de forno) que um lote ocupa: o `usoPorLote` da
+   * receita (BE-27). Omitido, 1.
    */
   usoPorLote?: number;
 }

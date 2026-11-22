@@ -282,7 +282,9 @@ describe('Contrato com o frontend (e2e)', () => {
       expect(receita.itens).toHaveLength(2);
       expect(receita.precoSugerido).toBeGreaterThan(0);
 
-      // Receita sem margem: os campos sem valor são omitidos, não `null`.
+      // BE-27: sem os campos da ficha técnica, a receita assume os padrões;
+      // sem lucro próprio, `lucroPercentual` é omitido (não `null`) e o
+      // preço sugerido usa o lucro padrão da empresa.
       const temporaria = await comA('post', '/receitas')
         .send({
           nome: 'Temporária',
@@ -292,8 +294,24 @@ describe('Contrato com o frontend (e2e)', () => {
         })
         .expect(201);
       const semMargem = validar(receitaSchema, temporaria.body);
-      expect(semMargem).not.toHaveProperty('margemLucro');
-      expect(semMargem).not.toHaveProperty('precoSugerido');
+      expect(temporaria.body).toMatchObject({
+        usoPorLote: 1,
+        embalagemPorUnidade: 0,
+        perdaPercentual: 0,
+      });
+      expect(temporaria.body).not.toHaveProperty('lucroPercentual');
+      expect(semMargem.precoSugerido).toBeGreaterThan(0);
+
+      const perdaTotal = await comA('post', '/receitas')
+        .send({
+          nome: 'Perda total',
+          rendimento: 1,
+          unidadeRendimento: 'UN',
+          perda_percentual: 1,
+          insumos: [{ insumo_id: acucarId, quantidade: 1 }],
+        })
+        .expect(400);
+      expect(validar(erroSchema, perdaTotal.body).code).toBe('DADOS_INVALIDOS');
 
       const lista = await comA('get', '/receitas').expect(200);
       expect(validar(z.array(receitaSchema), lista.body)).toHaveLength(2);

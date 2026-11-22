@@ -8,9 +8,11 @@ import {
   calcularCustoReceita,
   calcularPrecoVenda,
   type CustoReceita,
-  precisaRecalcular,
-  resolverMargem,
+  type FichaTecnica,
+  lucroPercentualInformado,
+  resolverFichaTecnica,
   simularCenario,
+  validarFichaTecnica,
 } from '../../domain/receitas.calculos.js';
 import { ReceitaRepository } from '../../infra/repositories/receita.repository.js';
 import type { CreateReceitaDto } from '../dto/create-receita.dto.js';
@@ -35,6 +37,24 @@ import {
 } from '../dto/simular-cenario.dto.js';
 import type { UpdateReceitaDto } from '../dto/update-receita.dto.js';
 
+/**
+ * Receita com o custo de 1 lote calculado na leitura (BE-27), para outros
+ * módulos (produções, vendas). Valores **sem arredondar** (BE-23).
+ */
+export type ReceitaComCusto = ReceitaComItens & {
+  custoProducao: number;
+  custoUnitario: number;
+};
+
+/** O que o custo de uma receita precisa da empresa, buscado uma vez só. */
+interface ContextoCusto {
+  custoPorInsumo: Map<number, number>;
+  gastos: Awaited<ReturnType<GastoIndiretoService['listarPorEmpresa']>>;
+  configuracao: Awaited<
+    ReturnType<ConfiguracaoCustosService['buscarDaEmpresa']>
+  >;
+}
+
 interface ItemEntrada {
   insumo_id: number;
   quantidade: number;
@@ -49,22 +69,28 @@ export class ReceitaService {
     private readonly configuracaoCustosService: ConfiguracaoCustosService,
   ) {}
 
-  /** Da mais nova para a mais antiga (`dataCriacao`). */
+  /** Da mais nova para a mais antiga (`dataCriacao`), com o custo atual. */
   async list(empresaId: number): Promise<ReceitaDto[]> {
     const rows = await this.repository.listByEmpresa(empresaId);
-    return rows.map(toReceitaDto);
+    const contexto = await this.contexto(
+      rows.flatMap((row) => row.itens.map((item) => item.insumoId)),
+      empresaId,
+    );
+    return rows.map((row) => this.toDto(row, contexto));
   }
 
   async findById(id: number, empresaId: number): Promise<ReceitaDto> {
-    return toReceitaDto(await this.getOrFail(id, empresaId));
+    const row = await this.getOrFail(id, empresaId);
+    return this.toDto(row, await this.contextoDe(row, empresaId));
   }
 
+  /** Campos da ficha técnica omitidos assumem os padrões (BE-27). */
   async create(dto: CreateReceitaDto, empresaId: number): Promise<ReceitaDto> {
-    const margemLucro = dto.margem_lucro ?? null;
-    const custo = await this.calcular(
-      dto.insumos,
-      dto.rendimento,
-      margemLucro,
+    const ficha = resolverFichaTecnica(this.fichaInformada(dto));
+    validarFichaTecnica(ficha);
+    // Antes de gravar: 404 se algum insumo não for da empresa.
+    const contexto = await this.contexto(
+      dto.insumos.map((item) => item.insumo_id),
       empresaId,
     );
     const row = await this.repository.create(
@@ -73,20 +99,17 @@ export class ReceitaService {
         nome: dto.nome,
         rendimento: dto.rendimento,
         unidadeRendimento: dto.unidadeRendimento,
-        custoProducao: custo.custoProducao,
-        custoUnitario: custo.custoUnitario,
-        margemLucro,
-        precoSugerido: custo.precoSugerido,
+        ...ficha,
       },
-      custo.itens,
+      dto.insumos.map(toItemData),
     );
-    return toReceitaDto(row);
+    return this.toDto(row, contexto);
   }
 
   /**
-   * Campo omitido mantém o valor salvo. O custo só é recalculado (com os
-   * custos atuais dos insumos e os gastos atuais) se vierem insumos,
-   * rendimento ou margem; `margem_lucro: null` remove margem e preço sugerido.
+   * Campo omitido mantém o valor salvo; `lucro_percentual: null` (ou
+   * `margem_lucro: null`) volta ao lucro padrão. Nada de custo é gravado:
+   * a resposta traz o custo atual.
    */
   async update(
     id: number,
@@ -94,41 +117,29 @@ export class ReceitaService {
     empresaId: number,
   ): Promise<ReceitaDto> {
     const atual = await this.getOrFail(id, empresaId);
-    const dadosBasicos = {
-      nome: dto.nome ?? undefined,
-      unidadeRendimento: dto.unidadeRendimento ?? undefined,
-    };
-    if (!precisaRecalcular(dto)) {
-      return toReceitaDto(await this.repository.update(id, dadosBasicos));
-    }
-
-    const rendimento = dto.rendimento ?? atual.rendimento;
-    const margemLucro = resolverMargem(dto.margem_lucro, atual.margemLucro);
+    const ficha = resolverFichaTecnica(this.fichaInformada(dto), atual);
+    validarFichaTecnica(ficha);
     const insumos =
-      dto.insumos ??
+      dto.insumos?.map(toItemData) ??
       atual.itens.map((item) => ({
-        insumo_id: item.insumoId,
+        insumoId: item.insumoId,
         quantidade: item.quantidade,
       }));
-    const custo = await this.calcular(
-      insumos,
-      rendimento,
-      margemLucro,
+    const contexto = await this.contexto(
+      insumos.map((item) => item.insumoId),
       empresaId,
     );
     const row = await this.repository.update(
       id,
       {
-        ...dadosBasicos,
-        rendimento,
-        custoProducao: custo.custoProducao,
-        custoUnitario: custo.custoUnitario,
-        margemLucro,
-        precoSugerido: custo.precoSugerido,
+        nome: dto.nome ?? undefined,
+        rendimento: dto.rendimento ?? undefined,
+        unidadeRendimento: dto.unidadeRendimento ?? undefined,
+        ...ficha,
       },
-      custo.itens,
+      dto.insumos ? insumos : undefined,
     );
-    return toReceitaDto(row);
+    return this.toDto(row, contexto);
   }
 
   async delete(id: number, empresaId: number): Promise<void> {
@@ -137,8 +148,8 @@ export class ReceitaService {
   }
 
   /**
-   * Custo de `lotes` lotes, recalculado com os custos atuais dos insumos e
-   * os gastos atuais da empresa (não usa os valores salvos). Não grava nada.
+   * Custo de `lotes` lotes, com os custos atuais dos insumos e os gastos
+   * atuais da empresa. Não grava nada.
    */
   async calcularCusto(
     id: number,
@@ -146,83 +157,151 @@ export class ReceitaService {
     empresaId: number,
   ): Promise<ReceitaCustoDto> {
     const receita = await this.getOrFail(id, empresaId);
-    const custo = await this.calcular(
-      receita.itens.map((item) => ({
-        insumo_id: item.insumoId,
-        quantidade: item.quantidade,
-      })),
-      receita.rendimento,
-      receita.margemLucro,
-      empresaId,
-      lotes,
-    );
-    return toReceitaCustoDto(custo);
+    const contexto = await this.contextoDe(receita, empresaId);
+    return toReceitaCustoDto(this.calcular(receita, contexto, lotes));
   }
 
-  /** Simulação de cenário com os valores salvos como padrão. Não grava nada. */
+  /** Simulação de cenário com o custo e o preço atuais como padrão. Não grava nada. */
   async simular(
     id: number,
     dto: SimularCenarioDto,
     empresaId: number,
   ): Promise<SimulacaoCenarioDto> {
     const receita = await this.getOrFail(id, empresaId);
-    return toSimulacaoCenarioDto(simularCenario(dto, receita));
+    const custo = this.calcular(
+      receita,
+      await this.contextoDe(receita, empresaId),
+    );
+    return toSimulacaoCenarioDto(
+      simularCenario(dto, {
+        custoUnitario: custo.custoUnitario,
+        precoSugerido: custo.precoSugerido,
+        rendimento: receita.rendimento,
+      }),
+    );
   }
 
-  /** Preço de venda para a margem informada, com o custo salvo. Não grava nada. */
+  /** Preço de venda para a margem informada, com o custo atual. Não grava nada. */
   async calcularPrecoVenda(
     id: number,
     dto: PrecoVendaBodyDto,
     empresaId: number,
   ): Promise<PrecoVendaDto> {
     const receita = await this.getOrFail(id, empresaId);
+    const custo = this.calcular(
+      receita,
+      await this.contextoDe(receita, empresaId),
+    );
     return toPrecoVendaDto(
-      calcularPrecoVenda(receita.custoUnitario, dto.margem_lucro),
+      calcularPrecoVenda(custo.custoUnitario, dto.margem_lucro),
     );
   }
 
   /**
-   * Para outros módulos (produções, vendas): a receita com os itens; 404 se
-   * não for da empresa. Devolve os valores salvos **sem arredondar** (não o
-   * `ReceitaDto`), porque eles entram em outras contas (BE-23).
+   * Para outros módulos (produções, vendas): a receita com os itens e o custo
+   * de 1 lote calculado agora; 404 se não for da empresa. Valores **sem
+   * arredondar** (não o `ReceitaDto`), porque entram em outras contas (BE-23).
    */
-  buscarDaEmpresa(
+  async buscarDaEmpresa(
     id: number,
     empresaId: number,
     tx?: PrismaTransaction,
-  ): Promise<ReceitaComItens> {
-    return this.getOrFail(id, empresaId, tx);
+  ): Promise<ReceitaComCusto> {
+    const receita = await this.getOrFail(id, empresaId, tx);
+    const custo = this.calcular(
+      receita,
+      await this.contextoDe(receita, empresaId, tx),
+    );
+    return {
+      ...receita,
+      custoProducao: custo.custoProducao,
+      custoUnitario: custo.custoUnitario,
+    };
   }
 
-  /** Insumos da empresa (404 se algum não for) e todos os gastos (lacuna 18). */
-  private async calcular(
-    insumos: ItemEntrada[],
-    rendimento: number,
-    margemLucro: number | null,
-    empresaId: number,
+  private fichaInformada(
+    dto: CreateReceitaDto | UpdateReceitaDto,
+  ): Parameters<typeof resolverFichaTecnica>[0] {
+    return {
+      usoPorLote: dto.uso_por_lote,
+      embalagemPorUnidade: dto.embalagem_por_unidade,
+      perdaPercentual: dto.perda_percentual,
+      lucroPercentual: lucroPercentualInformado(dto),
+    };
+  }
+
+  private toDto(row: ReceitaComItens, contexto: ContextoCusto): ReceitaDto {
+    return toReceitaDto(
+      row,
+      this.calcular(row, contexto),
+      this.lucroEfetivo(row, contexto),
+    );
+  }
+
+  private lucroEfetivo(ficha: FichaTecnica, contexto: ContextoCusto): number {
+    return ficha.lucroPercentual ?? contexto.configuracao.lucroPadrao;
+  }
+
+  private calcular(
+    receita: ReceitaComItens,
+    contexto: ContextoCusto,
     lotes = 1,
-  ): Promise<CustoReceita> {
-    const [encontrados, gastos, configuracao] = await Promise.all([
-      this.insumoService.buscarVariosDaEmpresa(
-        insumos.map((item) => item.insumo_id),
-        empresaId,
-      ),
-      this.gastoIndiretoService.listarPorEmpresa(empresaId),
-      this.configuracaoCustosService.buscarDaEmpresa(empresaId),
-    ]);
-    const custoPorId = new Map(encontrados.map((i) => [i.id, i.custoUnitario]));
+  ): CustoReceita {
     return calcularCustoReceita({
-      itens: insumos.map((item) => ({
-        insumoId: item.insumo_id,
+      itens: receita.itens.map((item) => ({
+        insumoId: item.insumoId,
         quantidade: item.quantidade,
-        custoUnitario: custoPorId.get(item.insumo_id) ?? 0,
+        custoUnitario: contexto.custoPorInsumo.get(item.insumoId) ?? 0,
       })),
-      rendimento,
-      margemLucro,
-      gastos,
-      capacidadeMensal: configuracao.capacidadeMensal,
+      rendimento: receita.rendimento,
+      usoPorLote: receita.usoPorLote,
+      lucroPercentual: this.lucroEfetivo(receita, contexto),
+      gastos: contexto.gastos,
+      capacidadeMensal: contexto.configuracao.capacidadeMensal,
       lotes,
     });
+  }
+
+  private contextoDe(
+    receita: ReceitaComItens,
+    empresaId: number,
+    tx?: PrismaTransaction,
+  ): Promise<ContextoCusto> {
+    return this.contexto(
+      receita.itens.map((item) => item.insumoId),
+      empresaId,
+      tx,
+    );
+  }
+
+  /**
+   * Custos atuais dos insumos (404 se algum não for da empresa), todos os
+   * gastos (lacuna 18) e a configuração de custos. Em sequência, porque
+   * dentro de uma transação as consultas usam a mesma conexão.
+   */
+  private async contexto(
+    insumoIds: number[],
+    empresaId: number,
+    tx?: PrismaTransaction,
+  ): Promise<ContextoCusto> {
+    const insumos = await this.insumoService.buscarVariosDaEmpresa(
+      insumoIds,
+      empresaId,
+      tx,
+    );
+    const gastos = await this.gastoIndiretoService.listarPorEmpresa(
+      empresaId,
+      tx,
+    );
+    const configuracao = await this.configuracaoCustosService.buscarDaEmpresa(
+      empresaId,
+      tx,
+    );
+    return {
+      custoPorInsumo: new Map(insumos.map((i) => [i.id, i.custoUnitario])),
+      gastos,
+      configuracao,
+    };
   }
 
   private async getOrFail(
@@ -239,4 +318,11 @@ export class ReceitaService {
     }
     return row;
   }
+}
+
+function toItemData(item: ItemEntrada): {
+  insumoId: number;
+  quantidade: number;
+} {
+  return { insumoId: item.insumo_id, quantidade: item.quantidade };
 }

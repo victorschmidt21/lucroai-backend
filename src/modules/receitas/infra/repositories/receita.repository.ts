@@ -11,17 +11,17 @@ import type { ReceitaComItens } from '../../application/dto/receita.dto.js';
 interface ItemData {
   insumoId: number;
   quantidade: number;
-  custoCalculado: number;
 }
 
+/** Sem custo: desde a BE-27 ele é calculado na leitura. */
 interface ReceitaData {
   nome: string;
   rendimento: number;
   unidadeRendimento: UnidadeMedida;
-  custoProducao: number;
-  custoUnitario: number;
-  margemLucro: number | null;
-  precoSugerido: number | null;
+  usoPorLote: number;
+  embalagemPorUnidade: number;
+  perdaPercentual: number;
+  lucroPercentual: number | null;
 }
 
 const include = { itens: { orderBy: { id: 'asc' } } } as const;

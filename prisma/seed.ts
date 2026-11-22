@@ -29,7 +29,10 @@ import { CANAIS_PADRAO } from '../src/modules/canais/domain/canais.calculos.js';
 import { CONFIGURACAO_CUSTOS_PADRAO } from '../src/modules/configuracao-custos/domain/configuracao-custos.calculos.js';
 import { calcularCustoUnitario } from '../src/modules/insumos/domain/insumos.calculos.js';
 import { calcularProducao } from '../src/modules/producoes/domain/producoes.calculos.js';
-import { calcularCustoReceita } from '../src/modules/receitas/domain/receitas.calculos.js';
+import {
+  calcularCustoReceita,
+  lucroDaMargem,
+} from '../src/modules/receitas/domain/receitas.calculos.js';
 import { Venda } from '../src/modules/vendas/domain/venda.entity.js';
 
 type Tx = Parameters<Parameters<PrismaClient['$transaction']>[0]>[0];
@@ -182,7 +185,10 @@ const GASTOS: {
   { descricao: 'Saquinho de Papel', valor: 0.1, tipo: 'POR_UNIDADE' },
 ];
 
-// Mesmos itens do recipe-service (quantidade por lote).
+// Mesmos itens do recipe-service (quantidade por lote). A margem (markup) de
+// lá vira lucro sobre o preço (BE-27) com `lucroDaMargem`, que dá o mesmo
+// preço sugerido. Uso de forno, embalagem e perda ficam nos padrões até a
+// BE-33 revisar o seed.
 const RECEITAS: {
   chave: string;
   nome: string;
@@ -446,7 +452,8 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
     gastos.push(await tx.gastoIndireto.create({ data: { empresaId, ...def } }));
   }
 
-  // Receitas com o custo de 1 lote e todos os gastos (como POST /receitas).
+  // Receitas e o custo de 1 lote com todos os gastos, que não é gravado:
+  // a API o calcula na leitura (BE-27).
   const receitas = new Map<
     string,
     {
@@ -467,10 +474,11 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
         custoUnitario: custoInsumo.get(insumoId) ?? 0,
       };
     });
+    const lucroPercentual = lucroDaMargem(def.margemLucro);
     const custo = calcularCustoReceita({
       itens,
       rendimento: def.rendimento,
-      margemLucro: def.margemLucro,
+      lucroPercentual,
       gastos,
       capacidadeMensal: CONFIGURACAO_CUSTOS_PADRAO.capacidadeMensal,
     });
@@ -480,12 +488,14 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
         nome: def.nome,
         rendimento: def.rendimento,
         unidadeRendimento: 'UN',
-        custoProducao: custo.custoProducao,
-        custoUnitario: custo.custoUnitario,
-        margemLucro: def.margemLucro,
-        precoSugerido: custo.precoSugerido,
+        lucroPercentual,
         dataCriacao: diasAtras(179),
-        itens: { create: custo.itens },
+        itens: {
+          create: custo.itens.map(({ insumoId, quantidade }) => ({
+            insumoId,
+            quantidade,
+          })),
+        },
       },
     });
     receitas.set(def.chave, {

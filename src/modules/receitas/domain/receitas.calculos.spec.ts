@@ -6,9 +6,13 @@ import {
   calcularCustoReceita,
   calcularPrecoSugerido,
   calcularPrecoVenda,
-  precisaRecalcular,
-  resolverMargem,
+  FICHA_TECNICA_PADRAO,
+  lucroDaMargem,
+  lucroPercentualInformado,
+  margemDoLucro,
+  resolverFichaTecnica,
   simularCenario,
+  validarFichaTecnica,
 } from './receitas.calculos.js';
 
 // Insumos e gastos do seed dos microsserviços (catalog-service). As fórmulas
@@ -95,16 +99,22 @@ describe('calcularCustoInvisivel', () => {
 });
 
 describe('calcularPrecoSugerido', () => {
-  it('com margem, sem arredondar', () => {
-    expect(calcularPrecoSugerido(0.81, 0.5)).toBeCloseTo(1.215, P);
+  it('lucro sobre o preço (BE-27): custo ÷ (1 − lucro), sem arredondar', () => {
+    // 0,85 ÷ 0,85 = 1: o lucro de R$ 0,15 é 15% do preço
+    expect(calcularPrecoSugerido(0.85, 0.15)).toBeCloseTo(1, P);
+    expect(calcularPrecoSugerido(0.81, 0.5)).toBeCloseTo(1.62, P);
   });
 
-  it('sem margem é null', () => {
+  it('sem lucro é null', () => {
     expect(calcularPrecoSugerido(0.81, null)).toBeNull();
   });
 
-  it('margem 0 mantém o custo', () => {
+  it('lucro 0 mantém o custo', () => {
     expect(calcularPrecoSugerido(0.81, 0)).toBe(0.81);
+  });
+
+  it('lucro ≥ 1 não tem preço', () => {
+    expect(calcularPrecoSugerido(0.81, 1)).toBeNull();
   });
 });
 
@@ -116,7 +126,7 @@ describe('calcularCustoReceita', () => {
       calcularCustoReceita({
         itens: paoFrances,
         rendimento: 50,
-        margemLucro: 0.6,
+        lucroPercentual: lucroDaMargem(0.6),
         gastos: [],
         capacidadeMensal: CAPACIDADE,
       }),
@@ -148,7 +158,7 @@ describe('calcularCustoReceita', () => {
     const r = calcularCustoReceita({
       itens: paoFrances,
       rendimento: 50,
-      margemLucro: 0.6,
+      lucroPercentual: lucroDaMargem(0.6),
       gastos: gastosSeed,
       capacidadeMensal: CAPACIDADE,
     });
@@ -170,7 +180,7 @@ describe('calcularCustoReceita', () => {
         { insumoId: 6, quantidade: 10, custoUnitario: 8.5 / 500 },
       ],
       rendimento: 12,
-      margemLucro: 0.5,
+      lucroPercentual: lucroDaMargem(0.5),
       gastos: gastosSeed,
       capacidadeMensal: CAPACIDADE,
     });
@@ -185,11 +195,11 @@ describe('calcularCustoReceita', () => {
     expect(r.precoSugerido).toBeCloseTo(4.40625, P);
   });
 
-  it('sem margem não tem preço sugerido', () => {
+  it('sem lucro não tem preço sugerido', () => {
     const r = calcularCustoReceita({
       itens: paoFrances,
       rendimento: 50,
-      margemLucro: null,
+      lucroPercentual: null,
       gastos: [],
       capacidadeMensal: CAPACIDADE,
     });
@@ -202,7 +212,7 @@ describe('calcularCustoReceita', () => {
       calcularCustoReceita({
         itens: paoFrances,
         rendimento,
-        margemLucro: null,
+        lucroPercentual: null,
         gastos: [],
         capacidadeMensal: CAPACIDADE,
       }),
@@ -222,7 +232,7 @@ describe('calcularCustoReceita para N lotes', () => {
     const r = calcularCustoReceita({
       itens: paoFrances,
       rendimento: 50,
-      margemLucro: 0.6,
+      lucroPercentual: lucroDaMargem(0.6),
       gastos: gastosSeed,
       capacidadeMensal: CAPACIDADE,
     });
@@ -234,7 +244,7 @@ describe('calcularCustoReceita para N lotes', () => {
     const r = calcularCustoReceita({
       itens: paoFrances,
       rendimento: 50,
-      margemLucro: 0.6,
+      lucroPercentual: lucroDaMargem(0.6),
       gastos: [],
       capacidadeMensal: CAPACIDADE,
       lotes: 3,
@@ -266,7 +276,7 @@ describe('calcularCustoReceita para N lotes', () => {
     const r = calcularCustoReceita({
       itens: paoFrances,
       rendimento: 50,
-      margemLucro: 0.6,
+      lucroPercentual: lucroDaMargem(0.6),
       gastos: gastosSeed,
       capacidadeMensal: CAPACIDADE,
       lotes: 3,
@@ -288,7 +298,7 @@ describe('calcularCustoReceita para N lotes', () => {
         { insumoId: 6, quantidade: 10, custoUnitario: 8.5 / 500 },
       ],
       rendimento: 12,
-      margemLucro: 0.5,
+      lucroPercentual: lucroDaMargem(0.5),
       gastos: [
         { valor: 12.5, tipo: 'MENSAL' },
         { valor: 0.015, tipo: 'POR_UNIDADE' },
@@ -423,40 +433,175 @@ describe('calcularPrecoVenda', () => {
   });
 });
 
-describe('resolverMargem', () => {
-  it('omitida mantém a salva', () => {
-    expect(resolverMargem(undefined, 0.6)).toBe(0.6);
+describe('calcularCustoInvisivel com uso de forno (BE-27)', () => {
+  it('o gasto mensal é multiplicado pelo usoPorLote; o por unidade, não', () => {
+    // 2435 × 2 ÷ 100 + 0.1 × 50
+    expect(
+      calcularCustoInvisivel(gastosSeed, 50, CAPACIDADE, 1, 2),
+    ).toBeCloseTo(53.7, P);
   });
 
-  it('null remove a margem (lacuna 21)', () => {
-    expect(resolverMargem(null, 0.6)).toBeNull();
+  it('minutos de forno: 45 min de 6000 min no mês', () => {
+    expect(
+      calcularCustoInvisivel(
+        [{ valor: 1800, tipo: 'MENSAL' }],
+        12,
+        6000,
+        1,
+        45,
+      ),
+    ).toBeCloseTo(13.5, P);
   });
 
-  it('número substitui', () => {
-    expect(resolverMargem(0.3, 0.6)).toBe(0.3);
-    expect(resolverMargem(0, null)).toBe(0);
-  });
-
-  it('com margem null o recálculo zera o preço sugerido', () => {
+  it('calcularCustoReceita repassa o usoPorLote', () => {
     const r = calcularCustoReceita({
       itens: paoFrances,
       rendimento: 50,
-      margemLucro: resolverMargem(null, 0.6),
-      gastos: [],
+      usoPorLote: 0.5,
+      lucroPercentual: null,
+      gastos: [{ valor: 2000, tipo: 'MENSAL' }],
       capacidadeMensal: CAPACIDADE,
+      lotes: 2,
     });
-    expect(r.precoSugerido).toBeNull();
+    // 2000 × 0.5 × 2 ÷ 100
+    expect(r.custoInvisivel).toBeCloseTo(20, P);
   });
 });
 
-describe('precisaRecalcular', () => {
-  it('só nome ou unidade não recalcula', () => {
-    expect(precisaRecalcular({})).toBe(false);
+describe('resolverFichaTecnica', () => {
+  it('receita criada sem os campos novos assume os padrões', () => {
+    expect(resolverFichaTecnica({})).toEqual({
+      usoPorLote: 1,
+      embalagemPorUnidade: 0,
+      perdaPercentual: 0,
+      lucroPercentual: null,
+    });
+    expect(
+      resolverFichaTecnica({
+        usoPorLote: null,
+        embalagemPorUnidade: null,
+        perdaPercentual: null,
+        lucroPercentual: null,
+      }),
+    ).toEqual(FICHA_TECNICA_PADRAO);
   });
 
-  it('insumos, rendimento ou margem (inclusive null) recalculam', () => {
-    expect(precisaRecalcular({ insumos: [] })).toBe(true);
-    expect(precisaRecalcular({ rendimento: 10 })).toBe(true);
-    expect(precisaRecalcular({ margem_lucro: null })).toBe(true);
+  it('campo informado substitui; omitido mantém o salvo', () => {
+    const salva = {
+      usoPorLote: 2,
+      embalagemPorUnidade: 0.3,
+      perdaPercentual: 0.05,
+      lucroPercentual: 0.2,
+    };
+    expect(resolverFichaTecnica({ usoPorLote: 3 }, salva)).toEqual({
+      ...salva,
+      usoPorLote: 3,
+    });
+  });
+
+  it('lucroPercentual null volta ao lucro padrão; os outros null mantêm', () => {
+    const salva = {
+      usoPorLote: 2,
+      embalagemPorUnidade: 0.3,
+      perdaPercentual: 0.05,
+      lucroPercentual: 0.2,
+    };
+    expect(
+      resolverFichaTecnica(
+        { usoPorLote: null, perdaPercentual: null, lucroPercentual: null },
+        salva,
+      ),
+    ).toEqual({ ...salva, lucroPercentual: null });
+  });
+});
+
+describe('validarFichaTecnica', () => {
+  const valida = {
+    usoPorLote: 1,
+    embalagemPorUnidade: 0,
+    perdaPercentual: 0,
+    lucroPercentual: null,
+  };
+
+  it('aceita os padrões e os limites válidos', () => {
+    expect(() => validarFichaTecnica(valida)).not.toThrow();
+    expect(() =>
+      validarFichaTecnica({
+        usoPorLote: 45,
+        embalagemPorUnidade: 0.15,
+        perdaPercentual: 0.999,
+        lucroPercentual: 0,
+      }),
+    ).not.toThrow();
+  });
+
+  it.each([1, 1.5])(
+    'perdaPercentual %d → 400 DADOS_INVALIDOS em perda_percentual',
+    (perdaPercentual) => {
+      expect(() => validarFichaTecnica({ ...valida, perdaPercentual })).toThrow(
+        expect.objectContaining({
+          code: 'DADOS_INVALIDOS',
+          details: [
+            {
+              field: 'perda_percentual',
+              messages: [
+                'perda_percentual deve ser uma fração de 0 até menos de 1',
+              ],
+            },
+          ],
+        }),
+      );
+    },
+  );
+
+  it('um detalhe por campo inválido', () => {
+    expect(() =>
+      validarFichaTecnica({
+        usoPorLote: 0,
+        embalagemPorUnidade: -0.1,
+        perdaPercentual: -0.1,
+        lucroPercentual: 1,
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'DADOS_INVALIDOS',
+        details: [
+          expect.objectContaining({ field: 'uso_por_lote' }),
+          expect.objectContaining({ field: 'embalagem_por_unidade' }),
+          expect.objectContaining({ field: 'perda_percentual' }),
+          expect.objectContaining({ field: 'lucro_percentual' }),
+        ],
+      }),
+    );
+  });
+});
+
+describe('compatibilidade com margem_lucro', () => {
+  it('lucroDaMargem e margemDoLucro são inversas e dão o mesmo preço', () => {
+    expect(lucroDaMargem(0.6)).toBeCloseTo(0.375, P);
+    expect(margemDoLucro(0.375)).toBeCloseTo(0.6, P);
+    expect(lucroDaMargem(0)).toBe(0);
+    expect(margemDoLucro(1)).toBeNull();
+    // custo × (1 + margem) = custo ÷ (1 − lucro)
+    expect(calcularPrecoSugerido(0.81, lucroDaMargem(0.5))).toBeCloseTo(
+      1.215,
+      P,
+    );
+  });
+
+  it('lucro_percentual tem prioridade sobre margem_lucro', () => {
+    expect(
+      lucroPercentualInformado({ lucro_percentual: 0.2, margem_lucro: 0.6 }),
+    ).toBe(0.2);
+  });
+
+  it('só margem_lucro é convertida; null volta ao padrão; omitidos mantêm', () => {
+    expect(lucroPercentualInformado({ margem_lucro: 0.6 })).toBeCloseTo(
+      0.375,
+      P,
+    );
+    expect(lucroPercentualInformado({ margem_lucro: null })).toBeNull();
+    expect(lucroPercentualInformado({ lucro_percentual: null })).toBeNull();
+    expect(lucroPercentualInformado({})).toBeUndefined();
   });
 });
