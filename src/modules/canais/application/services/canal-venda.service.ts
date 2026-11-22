@@ -59,6 +59,17 @@ export class CanalVendaService {
     await this.repository.createMany(empresaId, CANAIS_PADRAO, tx);
   }
 
+  /**
+   * Para outros módulos (receitas): os canais ativos da empresa, em ordem de
+   * criação, sem arredondar a comissão.
+   */
+  listarAtivosDaEmpresa(
+    empresaId: number,
+    tx?: PrismaTransaction,
+  ): Promise<CanalVenda[]> {
+    return this.repository.listAtivosByEmpresa(empresaId, tx);
+  }
+
   private async getOrFail(id: number, empresaId: number): Promise<CanalVenda> {
     const row = await this.repository.findByIdAndEmpresa(id, empresaId);
     if (!row) {

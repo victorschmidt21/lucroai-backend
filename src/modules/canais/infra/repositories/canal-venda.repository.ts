@@ -15,6 +15,16 @@ export class CanalVendaRepository {
     });
   }
 
+  listAtivosByEmpresa(
+    empresaId: number,
+    tx?: PrismaTransaction,
+  ): Promise<CanalVenda[]> {
+    return (tx ?? this.prisma).canalVenda.findMany({
+      where: { empresaId, ativo: true },
+      orderBy: { id: 'asc' },
+    });
+  }
+
   findByIdAndEmpresa(
     id: number,
     empresaId: number,

@@ -35,6 +35,23 @@ export const CANAIS_PADRAO: readonly Readonly<CanalVendaValores>[] =
     }),
   ]);
 
+export interface CanalParaTaxa {
+  balcao: boolean;
+  comissaoPercentual: number;
+}
+
+/**
+ * Taxa do canal sobre o preço (BE-28): no Balcão, a `taxaMaquininha` da
+ * configuração de custos (a comissão dele é ignorada); nos outros canais, a
+ * `comissaoPercentual`.
+ */
+export function taxaDoCanal(
+  canal: CanalParaTaxa,
+  taxaMaquininha: number,
+): number {
+  return canal.balcao ? taxaMaquininha : canal.comissaoPercentual;
+}
+
 /** O Balcão é o canal padrão da empresa e não pode ser excluído (422). */
 export function garantirCanalExcluivel(canal: { balcao: boolean }): void {
   if (canal.balcao) {
