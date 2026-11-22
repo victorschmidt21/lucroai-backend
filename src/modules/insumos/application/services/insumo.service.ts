@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { Insumo } from '../../../../generated/prisma/client.js';
 import { NotFoundError } from '../../../../shared/domain/errors/domain.error.js';
 import { TransactionManager } from '../../../../shared/infra/database/transaction.manager.js';
+import type { PrismaTransaction } from '../../../../shared/infra/database/prisma.transaction.js';
 import { EstoqueService } from '../../../estoque/application/services/estoque.service.js';
 import { calcularCustoUnitario } from '../../domain/insumos.calculos.js';
 import { InsumoRepository } from '../../infra/repositories/insumo.repository.js';
@@ -91,10 +92,15 @@ export class InsumoService {
   async buscarVariosDaEmpresa(
     ids: number[],
     empresaId: number,
+    tx?: PrismaTransaction,
   ): Promise<Insumo[]> {
     const unicos = [...new Set(ids)];
     if (unicos.length === 0) return [];
-    const rows = await this.repository.listByIdsAndEmpresa(unicos, empresaId);
+    const rows = await this.repository.listByIdsAndEmpresa(
+      unicos,
+      empresaId,
+      tx,
+    );
     if (rows.length !== unicos.length) {
       throw new NotFoundError('INSUMO_NAO_ENCONTRADO', 'Insumo não encontrado');
     }
