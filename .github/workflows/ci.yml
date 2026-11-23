@@ -67,6 +67,7 @@ jobs:
     env:
       NODE_ENV: test
       JWT_SECRET: segredo-ficticio-exclusivo-do-ci-com-32-caracteres
+      CADASTRO_EMPRESA_TOKEN: token-ficticio-exclusivo-do-ci-nao-use-em-producao-0000000000064
       DATABASE_URL: postgresql://lucroai:lucroai@localhost:5432/lucroai_test?schema=public
       E2E_DATABASE_URL: postgresql://lucroai:lucroai@localhost:5432/lucroai_test?schema=public
     steps:

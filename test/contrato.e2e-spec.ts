@@ -242,6 +242,8 @@ describe('Contrato com o frontend (e2e)', () => {
   const senha = 'senha-do-contrato';
   const emailA = `contrato-a-${sufixo}@example.com`;
   const emailB = `contrato-b-${sufixo}@example.com`;
+  // Token fictício do ambiente de teste (vitest.config.e2e.ts e CI, BE-36).
+  const tokenCadastro = process.env['CADASTRO_EMPRESA_TOKEN'] ?? '';
 
   let tokenA = '';
   let tokenB = '';
@@ -292,17 +294,50 @@ describe('Contrato com o frontend (e2e)', () => {
           nome_usuario: 'Ana',
           email: emailA,
           senha,
+          token_cadastro: tokenCadastro,
         })
         .expect(201);
       const corpo = validar(cadastroEmpresaSchema, res.body);
       empresaA = corpo.empresa.id;
 
       const resB = await chamar('post', '/auth/empresa')
-        .send({ nome_empresa: `Outra ${sufixo}`, email: emailB, senha })
+        .send({
+          nome_empresa: `Outra ${sufixo}`,
+          email: emailB,
+          senha,
+          token_cadastro: tokenCadastro,
+        })
         .expect(201);
       const corpoB = validar(cadastroEmpresaSchema, resB.body);
       expect(corpoB.empresa.cnpj).toBeNull();
       expect(corpoB.nome).toBeNull();
+    });
+
+    it('POST /auth/empresa sem token, com token errado ou com um prefixo responde 403', async () => {
+      expect(tokenCadastro.length).toBeGreaterThanOrEqual(64);
+      const emailNovo = `contrato-sem-token-${sufixo}@example.com`;
+      const corpo = { nome_empresa: `Sem token ${sufixo}`, senha };
+      const tentativas = [
+        { email: emailNovo },
+        { email: emailNovo, token_cadastro: '' },
+        { email: emailNovo, token_cadastro: 'token-errado' },
+        { email: emailNovo, token_cadastro: tokenCadastro.slice(0, -1) },
+        // Token errado com e-mail já cadastrado: 403, não 409 (BE-36).
+        { email: emailA, token_cadastro: 'token-errado' },
+      ];
+      for (const tentativa of tentativas) {
+        const res = await chamar('post', '/auth/empresa')
+          .send({ ...corpo, ...tentativa })
+          .expect(403);
+        const erro = validar(erroSchema, res.body);
+        expect(erro.code).toBe('TOKEN_CADASTRO_INVALIDO');
+        expect(JSON.stringify(erro)).not.toContain(tokenCadastro);
+      }
+
+      // Nada foi criado: o e-mail novo continua sem conta.
+      await chamar('post', '/auth/login')
+        .send({ email: emailNovo, senha })
+        .expect(401);
     });
 
     it('POST /auth/login devolve só o token, com o payload do contrato', async () => {

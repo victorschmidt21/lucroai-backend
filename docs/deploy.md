@@ -28,7 +28,7 @@ docker compose exec postgres createdb -U lucroai lucroai_prod_local   # banco va
 docker run --rm -p 3110:3110 \
   -e PORT=3110 \
   -e DATABASE_URL="postgresql://lucroai:lucroai@host.docker.internal:55640/lucroai_prod_local?schema=public" \
-  -e JWT_SECRET="exemplo-ficticio-com-mais-de-32-caracteres-0000" \
+  -e JWT_SECRET="exemplo-ficticio-com-mais-de-32-caracteres-0000"   -e CADASTRO_EMPRESA_TOKEN="exemplo-ficticio-com-64-caracteres-0000000000000000000000000000" \
   lucroai-backend
 
 curl http://localhost:3110/health        # {"status":"ok",...}
@@ -42,6 +42,7 @@ No Linux sem Docker Desktop, troque `host.docker.internal` pelo IP do host ou us
 | --- | --- | --- |
 | `DATABASE_URL` | sim | URL do Postgres gerenciado: `postgresql://<usuario>:<senha>@<host>:5432/<banco>?schema=public`. Se o provedor exigir TLS, acrescente `&sslmode=require`. |
 | `JWT_SECRET` | sim | Segredo **forte e aleatório**, com no mínimo 32 caracteres (a API não sobe sem ele em produção). Gere com `openssl rand -base64 48`. Trocar o valor derruba as sessões abertas (os tokens duram 4 h). |
+| `CADASTRO_EMPRESA_TOKEN` | sim | Token exigido no campo `token_cadastro` de `POST /auth/empresa` (BE-36), com no mínimo 64 caracteres (a API não sobe sem ele em produção). Gere com `openssl rand -hex 32` (64 caracteres hex, 256 bits) e entregue só a quem pode criar uma empresa. Para trocar, gere outro, atualize o segredo no provedor e reinicie o serviço: o token antigo deixa de valer na hora, e as contas e sessões já criadas não são afetadas. |
 | `PORT` | não | Porta HTTP. Padrão `3100`; use a que o provedor indicar. |
 | `NODE_ENV` | não | A imagem já define `production`. |
 
@@ -53,7 +54,7 @@ Os passos variam de nome entre provedores, mas são sempre estes:
 
 1. **Postgres gerenciado**: crie uma instância Postgres 17 (16 também serve) e copie a URL de conexão. Use a URL interna/privada quando a API e o banco estão no mesmo provedor.
 2. **Serviço web a partir do repositório** `victorschmidt21/lucroai-backend`, branch `main`, usando o `Dockerfile` com **target `production`** (no Fly, `fly launch` gera o `fly.toml`; em Render/Railway, escolha "Docker" e informe o target se o painel pedir, ou faça o build e publique a imagem num registry).
-3. **Variáveis**: `DATABASE_URL` e `JWT_SECRET` como segredos; `PORT` só se o provedor não injetar.
+3. **Variáveis**: `DATABASE_URL`, `JWT_SECRET` e `CADASTRO_EMPRESA_TOKEN` como segredos; `PORT` só se o provedor não injetar.
 4. **Health check HTTP**: caminho `/health`, esperando `200`.
 5. **https**: use o domínio https do provedor ou um domínio próprio (registro `CNAME` no DNS apontando para o que o provedor indicar). O frontend em produção recusa URL `http`.
 6. **Deploy**: o primeiro deploy aplica as migrations no banco vazio. Confira os logs (`All migrations have been successfully applied` / `No pending migrations to apply`) e `curl https://<api>/health`.
@@ -94,6 +95,7 @@ Localmente, o mesmo vale no `.env.local` do frontend: as cinco variáveis com `h
 
 - [ ] Postgres gerenciado criado; `DATABASE_URL` copiada.
 - [ ] `JWT_SECRET` gerado (`openssl rand -base64 48`) e cadastrado como segredo.
+- [ ] `CADASTRO_EMPRESA_TOKEN` gerado (`openssl rand -hex 32`) e cadastrado como segredo.
 - [ ] Serviço criado com o `Dockerfile` (target `production`), health check em `/health` e https.
 - [ ] Primeiro deploy no ar: logs mostram as migrations aplicadas e `GET https://<api>/health` responde `200`.
 - [ ] Dados: seed rodado da máquina local (demonstração) **ou** issue de migração dos dados dos microsserviços concluída (base em uso).

@@ -1,5 +1,37 @@
 import { describe, expect, it } from 'vitest';
-import { montarPayloadJwt, normalizarEmail } from './auth.calculos.js';
+import {
+  montarPayloadJwt,
+  normalizarEmail,
+  tokenCadastroValido,
+} from './auth.calculos.js';
+
+describe('tokenCadastroValido', () => {
+  const esperado = 'a'.repeat(64);
+
+  it('aceita o token certo', () => {
+    expect(tokenCadastroValido('a'.repeat(64), esperado)).toBe(true);
+  });
+
+  it('recusa o token errado do mesmo tamanho', () => {
+    expect(tokenCadastroValido('b'.repeat(64), esperado)).toBe(false);
+  });
+
+  it('recusa o token vazio ou ausente', () => {
+    expect(tokenCadastroValido('', esperado)).toBe(false);
+    expect(tokenCadastroValido(undefined, esperado)).toBe(false);
+  });
+
+  it('recusa o token de tamanho diferente, inclusive um prefixo do certo', () => {
+    expect(tokenCadastroValido('a'.repeat(63), esperado)).toBe(false);
+    expect(tokenCadastroValido('a'.repeat(65), esperado)).toBe(false);
+  });
+
+  it('recusa qualquer token quando o esperado não está configurado', () => {
+    expect(tokenCadastroValido('', undefined)).toBe(false);
+    expect(tokenCadastroValido('', '')).toBe(false);
+    expect(tokenCadastroValido('qualquer', undefined)).toBe(false);
+  });
+});
 
 describe('normalizarEmail', () => {
   it('apara os espaços e passa para minúsculas', () => {

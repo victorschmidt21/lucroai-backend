@@ -31,7 +31,7 @@ Fórmulas e regras de cada rota estão em [business-rules.md](business-rules.md)
 | Módulo | Método e rota | Corpo | Resposta | Sucesso | Issue |
 | --- | --- | --- | --- | --- | --- |
 | — | `GET /health` (pública) | — | `{ status, database }` | 200 | BE-01 |
-| `auth` | `POST /auth/empresa` (pública) | `{ nome_empresa, cnpj?, segmento?, nome_usuario?, email, senha }` | `{ sub, email, nome, empresa, access_token }` | 201 | BE-06 |
+| `auth` | `POST /auth/empresa` (pública) | `{ nome_empresa, cnpj?, segmento?, nome_usuario?, email, senha, token_cadastro }` | `{ sub, email, nome, empresa, access_token }` | 201 | BE-06, BE-36 |
 | `auth` | `POST /auth/login` (pública) | `{ email, senha }` | `{ access_token }` | 200 | BE-06 |
 | `insumos` | `GET /insumos` | — | `Insumo[]` (por nome) | 200 | BE-07 |
 | `insumos` | `GET /insumos/:id` | — | `Insumo` | 200 | BE-07 |
@@ -80,6 +80,7 @@ Observações:
 
 - Os corpos misturam convenções: insumos, custo e simulação usam `camelCase` (`quantidadeBaseCusto`, `quantidadeLotes`, `novoPreco`); gastos, receitas, produções e vendas usam `snake_case` (`metodo_rateio`, `margem_lucro`, `receita_id`, `preco_unitario_real`). As respostas são `camelCase`, menos `ReceitaCusto` e `PrecoVenda`. **Mantenha os nomes como estão**: no DTO, o nome da propriedade é o nome do campo do JSON.
 - `POST /auth/empresa`: o `CreateEmpresaDto` atual exige `cnpj` e `nome_usuario`; a BE-06 os torna opcionais, o que é compatível (o banco já aceita `null`, e o payload os devolve como `null`). Textos são aparados (vazio = sem valor), com os limites das colunas: `nome_empresa` até 100, `cnpj` até 18, `segmento`, `nome_usuario` e `email` até 80; `senha` com no mínimo 6.
+- `POST /auth/empresa` exige `token_cadastro` (BE-36), igual ao `CADASTRO_EMPRESA_TOKEN` do servidor ([deploy.md](deploy.md)). Ausente, vazio ou errado responde **403** `TOKEN_CADASTRO_INVALIDO` ("Token de cadastro inválido"), sempre com a mesma mensagem. O token é conferido antes de qualquer acesso ao banco, então token errado com e-mail ou CNPJ já cadastrado responde 403, e não 409. A comparação é em tempo constante (SHA-256 dos dois valores e `timingSafeEqual`). Sem a variável em `development`/`test`, o cadastro fica desativado (403). O corpo continua validado antes (400 `DADOS_INVALIDOS`), e o limite de tentativas do `AuthController` vale para a rota. A resposta não muda.
 - `POST /auth/login` e `POST /auth/empresa`: `email` é aparado e passado para minúsculas antes da validação (`@IsEmail`).
 - `POST /insumos` e `PATCH /insumos/:id`: `nome` aparado, não vazio e com até 80 caracteres; `quantidadeBaseCusto ≥ 0.000001`; `valorPago ≥ 0`; `unidade` do enum `UnidadeMedida`; `quantidadeDisponivelInicial ≥ 0` só no `POST` (no `PATCH` → 400). `DELETE` de insumo usado em receita → 409 `INSUMO_EM_USO`.
   - **Muda (BE-29):** o `POST` cria também a compra inicial. O `PATCH` aceita `precoMercado` (≥ 0 ou `null`, por unidade do insumo), o preço de mercado informado sem compra; `null` volta ao último custo. Sem `precoMercado`, um `valorPago` ou `quantidadeBaseCusto` diferente do salvo informa o preço de mercado `valorPago / quantidadeBaseCusto` (o formulário atual continua mudando o preço). Ver [Insumos](business-rules.md#insumos).
@@ -231,7 +232,7 @@ Formato único, gerado pelo `AllExceptionsFilter` (`src/shared/infra/http/`), o 
 | 400 | `InvalidInputError` | entrada que só o service confere | `PRECO_INVALIDO`, `RECEITA_SEM_CUSTO`, `RECEITA_SEM_PRECO`, `RENDIMENTO_INVALIDO` |
 | 400 | exceção do Nest | `ParseIntPipe`, JSON malformado | `DADOS_INVALIDOS` |
 | 401 | `UnauthorizedError` / `JwtAuthGuard` | sem token (`NAO_AUTENTICADO`, "Autenticação necessária"), token inválido ou expirado (`TOKEN_INVALIDO`, "Token inválido ou expirado"), credenciais inválidas | `NAO_AUTENTICADO`, `TOKEN_INVALIDO`, `CREDENCIAIS_INVALIDAS` |
-| 403 | `ForbiddenError` | reservado; outra empresa responde 404 | — |
+| 403 | `ForbiddenError` | token de cadastro ausente ou inválido em `POST /auth/empresa` (BE-36); outra empresa continua respondendo 404 | `TOKEN_CADASTRO_INVALIDO` |
 | 404 | `NotFoundError` | inexistente **ou de outra empresa** | `<ENTIDADE>_NAO_ENCONTRADO` |
 | 404 | exceção do Nest | rota inexistente | `RECURSO_NAO_ENCONTRADO` |
 | 409 | `ConflictError` | duplicidade ou registro em uso | `CNPJ_JA_CADASTRADO`, `EMAIL_JA_CADASTRADO`, `INSUMO_EM_USO`, `RECEITA_EM_USO` |

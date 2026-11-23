@@ -21,7 +21,8 @@ export const transformarEmail = ({ value }: { value: unknown }): unknown =>
 
 /**
  * Corpo de `POST /auth/empresa`, como o `CreateEmpresaDto` do auth-service.
- * `cnpj` e `nome_usuario` passam a ser opcionais (BE-06, aditivo).
+ * `cnpj` e `nome_usuario` passam a ser opcionais (BE-06, aditivo), e
+ * `token_cadastro` passa a ser exigido pelo service (BE-36).
  */
 export class CreateEmpresaDto {
   /** @example 'Padaria da Ana' */
@@ -63,4 +64,16 @@ export class CreateEmpresaDto {
   @IsNotEmpty()
   @MinLength(6)
   senha: string;
+
+  /**
+   * Token de cadastro entregue por quem administra o sistema (BE-36). É
+   * opcional na validação de propósito: ausente, vazio ou errado responde 403
+   * `TOKEN_CADASTRO_INVALIDO` no service, sem dizer o que falhou. Não é
+   * aparado: precisa ser exatamente o configurado.
+   * @example 'f3a9c1d27b...'
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(256)
+  token_cadastro?: string;
 }

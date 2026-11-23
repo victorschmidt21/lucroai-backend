@@ -19,6 +19,9 @@ export const envSchema = z
           : 'deve ser uma URL de conexão PostgreSQL (postgresql://...)',
     }),
     JWT_SECRET: z.string().optional(),
+    // Token do cadastro de empresa (BE-36). Sem valor em development/test, o
+    // cadastro fica desativado (403); não há valor padrão de propósito.
+    CADASTRO_EMPRESA_TOKEN: z.string().optional(),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV === 'development' || env.NODE_ENV === 'test') return;
@@ -33,6 +36,20 @@ export const envSchema = z
         code: 'custom',
         path: ['JWT_SECRET'],
         message: `deve ter no mínimo 32 caracteres em ${env.NODE_ENV}`,
+      });
+    }
+    // 64 caracteres hex (`openssl rand -hex 32`) = 256 bits de entropia.
+    if (env.CADASTRO_EMPRESA_TOKEN === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['CADASTRO_EMPRESA_TOKEN'],
+        message: `variável obrigatória não definida em ${env.NODE_ENV}`,
+      });
+    } else if (env.CADASTRO_EMPRESA_TOKEN.length < 64) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['CADASTRO_EMPRESA_TOKEN'],
+        message: `deve ter no mínimo 64 caracteres em ${env.NODE_ENV}`,
       });
     }
   })

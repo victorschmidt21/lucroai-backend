@@ -1,3 +1,5 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
+
 /**
  * Payload do JWT, o mesmo que o auth-service dos microsserviços emite
  * (`auth.service.ts`, `buildToken`). O frontend lê esses nomes: não mude.
@@ -53,4 +55,22 @@ export function montarPayloadJwt(
       segmento: empresa.segmento,
     },
   };
+}
+
+/**
+ * Confere o token de cadastro de empresa (BE-36) em tempo constante: compara
+ * o SHA-256 dos dois valores com `timingSafeEqual`, para os tamanhos ficarem
+ * iguais e o tempo não revelar nem o tamanho nem o conteúdo do token certo.
+ * Token esperado ausente ou vazio desativa o cadastro (sempre `false`).
+ */
+export function tokenCadastroValido(
+  recebido: string | undefined,
+  esperado: string | undefined,
+): boolean {
+  if (!esperado) return false;
+  const hashRecebido = createHash('sha256')
+    .update(recebido ?? '')
+    .digest();
+  const hashEsperado = createHash('sha256').update(esperado).digest();
+  return timingSafeEqual(hashRecebido, hashEsperado);
 }
