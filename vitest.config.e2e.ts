@@ -16,6 +16,9 @@ export default defineConfig({
         process.env['E2E_DATABASE_URL'] ??
         'postgresql://lucroai:lucroai@localhost:55640/lucroai_test?schema=public',
       JWT_SECRET: 'segredo-ficticio-exclusivo-dos-testes-e2e-32+',
+      // Token de cadastro de empresa (BE-36), fictício e com 64 caracteres.
+      CADASTRO_EMPRESA_TOKEN:
+        'token-ficticio-exclusivo-dos-testes-e2e-nao-use-em-producao-0064',
     },
   },
 });

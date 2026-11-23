@@ -1,13 +1,19 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
-import { UnauthorizedError } from '../../../../shared/domain/errors/domain.error.js';
+import type { Env } from '../../../../config/env.validation.js';
+import {
+  ForbiddenError,
+  UnauthorizedError,
+} from '../../../../shared/domain/errors/domain.error.js';
 import { TransactionManager } from '../../../../shared/infra/database/transaction.manager.js';
 import { CanalVendaService } from '../../../canais/application/services/canal-venda.service.js';
 import { ConfiguracaoCustosService } from '../../../configuracao-custos/application/services/configuracao-custos.service.js';
 import {
   type EmpresaParaToken,
   montarPayloadJwt,
+  tokenCadastroValido,
   type UsuarioParaToken,
 } from '../../domain/auth.calculos.js';
 import { EmpresaRepository } from '../../infra/repositories/empresa.repository.js';
@@ -32,13 +38,27 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configuracaoCustosService: ConfiguracaoCustosService,
     private readonly canalVendaService: CanalVendaService,
+    private readonly configService: ConfigService<Env, true>,
   ) {}
 
   /**
    * Cria a empresa, o primeiro usuário, a configuração de custos padrão
-   * (BE-24) e os canais de venda padrão (BE-25) na mesma transação.
+   * (BE-24) e os canais de venda padrão (BE-25) na mesma transação. Exige o
+   * token de cadastro (BE-36).
    */
   async criarEmpresa(dto: CreateEmpresaDto): Promise<EmpresaCriadaDto> {
+    // O token é conferido antes de qualquer acesso ao banco (BE-36): sem ele,
+    // a rota não revela se o e-mail ou o CNPJ já existem (403, nunca 409).
+    const tokenEsperado = this.configService.get('CADASTRO_EMPRESA_TOKEN', {
+      infer: true,
+    });
+    if (!tokenCadastroValido(dto.token_cadastro, tokenEsperado)) {
+      throw new ForbiddenError(
+        'TOKEN_CADASTRO_INVALIDO',
+        'Token de cadastro inválido',
+      );
+    }
+
     const senha = await argon2.hash(dto.senha);
 
     // A empresa é criada antes do usuário: com CNPJ e e-mail repetidos, o
