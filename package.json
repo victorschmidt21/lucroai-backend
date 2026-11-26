@@ -1,7 +1,7 @@
 {
   "name": "lucroai-backend",
   "version": "0.0.1",
-  "description": "Backend do LucroAI: monolito modular (NestJS + Prisma + Postgres)",
+  "description": "Backend do Doce Fatia: monolito modular (NestJS + Prisma + Postgres)",
   "author": "",
   "private": true,
   "license": "UNLICENSED",
