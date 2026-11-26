@@ -115,6 +115,9 @@ const receitaComReceitasSchema = receitaNovaSchema.extend({
       nome: z.string(),
       quantidade: z.number(),
       unidade: z.string(),
+      // Custo da receita usada (BE-40).
+      custoUnitario: z.number(),
+      custoCalculado: z.number(),
     }),
   ),
   usadaEm: z.array(z.object({ receitaId: z.number().int(), nome: z.string() })),
@@ -1171,6 +1174,10 @@ describe('Contrato com o frontend (e2e)', () => {
         (await brigadeiro('Brigadeiro branco')).body,
       );
       expect(preto.vendavel).toBe(false);
+      // Receita só para usar dentro de outras: tem custo, não tem preço (BE-40).
+      expect(preto.custoUnitario).toBeGreaterThan(0);
+      expect(preto).not.toHaveProperty('precoSugerido');
+      expect(preto.precos).toEqual([]);
       const brownieRes = await criar({
         nome: 'Brownie',
         rendimento: 20,
@@ -1193,7 +1200,7 @@ describe('Contrato com o frontend (e2e)', () => {
       }).expect(201);
       const doisAmores = validar(receitaComReceitasSchema, doisAmoresRes.body);
       expect(doisAmores.itens).toHaveLength(1);
-      expect(doisAmores.receitas).toEqual([
+      expect(doisAmores.receitas).toMatchObject([
         {
           receitaId: brownie.id,
           nome: 'Brownie',
@@ -1213,6 +1220,25 @@ describe('Contrato com o frontend (e2e)', () => {
           unidade: 'G',
         },
       ]);
+      // O custo das receitas usadas entra nos ingredientes do lote (BE-40).
+      for (const item of doisAmores.receitas) {
+        expect(item.custoCalculado).toBeCloseTo(
+          item.quantidade * item.custoUnitario,
+          1,
+        );
+      }
+      const [deBrigadeiro] = doisAmores.receitas.slice(1);
+      // Ingredientes + forno, sem embalagem nem gastos por unidade, por grama.
+      expect(deBrigadeiro?.custoUnitario).toBeCloseTo(
+        (preto.custo.ingredientesLote + preto.custo.gastosMensaisLote) / 1000,
+        4,
+      );
+      const ingredientes =
+        (doisAmores.itens[0]?.custoCalculado ?? 0) +
+        doisAmores.receitas.reduce((t, item) => t + item.custoCalculado, 0);
+      expect(doisAmores.custo.ingredientesLote).toBeCloseTo(ingredientes, 1);
+      expect(doisAmores.precoSugerido).toBeGreaterThan(0);
+
       const lido = await comA('get', `/receitas/${branco.id}`).expect(200);
       expect(validar(receitaComReceitasSchema, lido.body).usadaEm).toEqual([
         { receitaId: doisAmores.id, nome: 'Brownie Dois Amores' },
