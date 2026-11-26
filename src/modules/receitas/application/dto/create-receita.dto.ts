@@ -1,7 +1,7 @@
 import { Transform, Type } from 'class-transformer';
 import {
-  ArrayNotEmpty,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsInt,
   IsNotEmpty,
@@ -24,6 +24,22 @@ export class CreateItemReceitaDto {
   /** Quantidade por lote, na unidade do insumo. @example 0.25 */
   @IsNumber()
   @Min(0.001)
+  quantidade: number;
+}
+
+export class CreateItemReceitaReceitaDto {
+  /** Receita da empresa, só com ingredientes (um nível só). @example 2 */
+  @IsInt()
+  @IsPositive()
+  receita_id: number;
+
+  /**
+   * Quantidade por lote, na unidade do rendimento da receita usada
+   * (`unidadeRendimento`): gramas se ela rende em G, unidades se em UN.
+   * @example 150
+   */
+  @IsNumber()
+  @IsPositive()
   quantidade: number;
 }
 
@@ -93,10 +109,31 @@ export class CreateReceitaDto {
   @Min(0)
   lucro_percentual?: number | null;
 
-  /** Itens da receita (pelo menos um). */
+  /**
+   * `false`: a receita só serve para usar dentro de outras (BE-39).
+   * Padrão `true`. @example true
+   */
+  @IsOptional()
+  @IsBoolean()
+  vendavel?: boolean;
+
+  /**
+   * Insumos da receita. Omitido → `[]` (BE-39); a receita precisa de ao
+   * menos um insumo ou receita.
+   */
+  @IsOptional()
   @IsArray()
-  @ArrayNotEmpty()
   @ValidateNested({ each: true })
   @Type(() => CreateItemReceitaDto)
-  insumos: CreateItemReceitaDto[];
+  insumos?: CreateItemReceitaDto[];
+
+  /**
+   * Receitas usadas dentro desta (BE-39), sem repetir, cada uma só com
+   * ingredientes. Omitido → `[]`.
+   */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateItemReceitaReceitaDto)
+  receitas?: CreateItemReceitaReceitaDto[];
 }

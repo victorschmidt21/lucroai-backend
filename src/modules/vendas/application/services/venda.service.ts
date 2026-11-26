@@ -19,6 +19,7 @@ import {
   DIAS_PONTO_EQUILIBRIO,
   type ItemParaMargem,
   percentuaisSemLucroDaVenda,
+  validarReceitaVendavel,
 } from '../../domain/vendas.calculos.js';
 import { VendaRepository } from '../../infra/repositories/venda.repository.js';
 import type { CreateVendaDto } from '../dto/create-venda.dto.js';
@@ -114,7 +115,8 @@ export class VendaService {
    * Registra a venda `PENDENTE` no canal informado (Balcão se omitido, BE-30),
    * com o custo unitário de cada receita ao custo médio dos insumos copiado na
    * hora e o lucro real de cada item. Receita ou canal de outra empresa → 404
-   * (lacuna 26). Não confere o estoque (lacuna 24): a barreira é a conclusão.
+   * (lacuna 26). Receita com `vendavel: false` → 422 (BE-41). Não confere o
+   * estoque (lacuna 24): a barreira é a conclusão.
    */
   async create(dto: CreateVendaDto, empresaId: number): Promise<VendaDto> {
     const canal = await this.canalVendaService.buscarParaVenda(
@@ -124,10 +126,12 @@ export class VendaService {
     const receitas = new Map<number, ReceitaComCusto>();
     for (const item of dto.itens) {
       if (receitas.has(item.receita_id)) continue;
-      receitas.set(
+      const receita = await this.receitaService.buscarDaEmpresa(
         item.receita_id,
-        await this.receitaService.buscarDaEmpresa(item.receita_id, empresaId),
+        empresaId,
       );
+      validarReceitaVendavel(receita);
+      receitas.set(item.receita_id, receita);
     }
     // Imposto, maquininha e gastos percentuais são da empresa, iguais em
     // todas as receitas; o lucro da receita não entra.

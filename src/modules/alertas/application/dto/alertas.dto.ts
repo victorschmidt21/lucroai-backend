@@ -3,6 +3,7 @@ import { round4, round6 } from '../../../../shared/domain/arredondamento.js';
 import type {
   AlertaEstoqueNegativo,
   AlertaPrecoDefasado,
+  AlertaProdutoNegativo,
 } from '../../domain/alertas.calculos.js';
 
 /** Insumo com saldo abaixo de zero (BE-32). */
@@ -51,20 +52,42 @@ export class AlertaPrecoDefasadoDto {
   receitas: ReceitaAfetadaDto[];
 }
 
+/**
+ * Receita com o estoque pronto abaixo de zero (BE-41): foi usada dentro de
+ * outra sem a produção dela ter sido registrada.
+ */
+export class AlertaProdutoNegativoDto {
+  /** @example 3 */
+  receitaId: number;
+  /** @example 'Brigadeiro branco' */
+  nome: string;
+  /** Saldo do estoque pronto, abaixo de zero, com 6 casas. @example -300 */
+  saldo: number;
+  /** Unidade do rendimento da receita. @example 'G' */
+  unidade: UnidadeMedida;
+}
+
 /** Resposta de `GET /alertas` (BE-32). */
 export class AlertasDto {
   /** Insumos com saldo < 0, por nome. */
   estoqueNegativo: AlertaEstoqueNegativoDto[];
   /** Insumos com a reposição mais de 10% acima do custo médio, por nome. */
   precoDefasado: AlertaPrecoDefasadoDto[];
+  /** Novo (BE-41): receitas com o estoque pronto < 0, por nome. */
+  produtosNegativos: AlertaProdutoNegativoDto[];
 }
 
 export function toAlertasDto(
   estoqueNegativo: AlertaEstoqueNegativo<UnidadeMedida>[],
   precoDefasado: AlertaPrecoDefasado<UnidadeMedida>[],
+  produtosNegativos: AlertaProdutoNegativo<UnidadeMedida>[],
 ): AlertasDto {
   return {
     estoqueNegativo,
+    produtosNegativos: produtosNegativos.map((alerta) => ({
+      ...alerta,
+      saldo: round6(alerta.saldo),
+    })),
     precoDefasado: precoDefasado.map((alerta) => ({
       id: alerta.id,
       nome: alerta.nome,

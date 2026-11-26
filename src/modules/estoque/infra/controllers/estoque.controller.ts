@@ -11,21 +11,16 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../../../shared/infra/auth/current-user.decorator.js';
 import type { UsuarioAutenticado } from '../../../../shared/infra/auth/usuario-autenticado.js';
 import { AtualizarMinimoEstoqueDto } from '../../application/dto/atualizar-minimo-estoque.dto.js';
-import type { EstoqueProdutoDto } from '../../application/dto/estoque-produto.dto.js';
 import type { EstoqueDto } from '../../application/dto/estoque.dto.js';
 import type { MovimentacaoEstoqueDto } from '../../application/dto/movimentacao-estoque.dto.js';
 import { RegistrarEntradaEstoqueDto } from '../../application/dto/registrar-entrada-estoque.dto.js';
-import { EstoqueProdutoAcabadoService } from '../../application/services/estoque-produto-acabado.service.js';
 import { EstoqueService } from '../../application/services/estoque.service.js';
 
 @ApiTags('estoque')
 @ApiBearerAuth()
 @Controller('estoque')
 export class EstoqueController {
-  constructor(
-    private readonly service: EstoqueService,
-    private readonly produtoAcabadoService: EstoqueProdutoAcabadoService,
-  ) {}
+  constructor(private readonly service: EstoqueService) {}
 
   /** Lista o estoque de todos os insumos da empresa (novo, BE-11) */
   @Get('insumos')
@@ -69,13 +64,5 @@ export class EstoqueController {
     @CurrentUser() usuario: UsuarioAutenticado,
   ): Promise<MovimentacaoEstoqueDto[]> {
     return this.service.listMovimentacoes(id, usuario.empresa.id);
-  }
-
-  /** Saldo de produto acabado por receita da empresa (novo, BE-12) */
-  @Get('produtos')
-  listProdutos(
-    @CurrentUser() usuario: UsuarioAutenticado,
-  ): Promise<EstoqueProdutoDto[]> {
-    return this.produtoAcabadoService.list(usuario.empresa.id);
   }
 }

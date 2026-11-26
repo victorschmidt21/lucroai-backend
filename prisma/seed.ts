@@ -183,6 +183,25 @@ const INSUMOS: {
     estoqueInicial: 300,
     estoqueMinimo: 50,
   },
+  // Para os brigadeiros e o Brownie Dois Amores (BE-40).
+  {
+    chave: 'LEITE_CONDENSADO',
+    nome: 'Leite Condensado',
+    quantidadeBaseCusto: 395,
+    unidade: 'G',
+    valorPago: 6.9,
+    estoqueInicial: 1580,
+    estoqueMinimo: 790,
+  },
+  {
+    chave: 'LEITE_NINHO',
+    nome: 'Leite em Pó Ninho',
+    quantidadeBaseCusto: 380,
+    unidade: 'G',
+    valorPago: 21.9,
+    estoqueInicial: 380,
+    estoqueMinimo: 100,
+  },
 ];
 
 // Configuração do seed (BE-33): rateio por fornadas, 100 fornadas por mês,
@@ -230,7 +249,13 @@ const RECEITAS: {
   embalagemPorUnidade: number;
   perdaPercentual: number;
   lucroPercentual: number | null;
+  /** `UN` se omitido. */
+  unidadeRendimento?: UnidadeMedida;
+  /** `true` se omitido (BE-39). */
+  vendavel?: boolean;
   itens: [string, number][];
+  /** Receitas usadas dentro (BE-39), já declaradas antes nesta lista. */
+  receitas?: [string, number][];
 }[] = [
   {
     chave: 'PAO',
@@ -292,6 +317,77 @@ const RECEITAS: {
       ['OVOS', 6],
       ['COCO', 100],
       ['MANTEIGA', 20],
+    ],
+  },
+  // Receita dentro de receita (BE-39/BE-40), o pedido da Mah: os brigadeiros
+  // rendem 1000 g e só servem para usar dentro de outras (sem preço); o
+  // Brownie Dois Amores leva 1 brownie, 150 g de cada brigadeiro e leite
+  // Ninho. Só produção e venda das outras usam `custoDe`, que não soma
+  // receitas usadas.
+  {
+    chave: 'BRIGADEIRO_PRETO',
+    nome: 'Brigadeiro preto',
+    rendimento: 1000,
+    unidadeRendimento: 'G',
+    vendavel: false,
+    usoPorLote: 0.1,
+    embalagemPorUnidade: 0,
+    perdaPercentual: 0,
+    lucroPercentual: null,
+    itens: [
+      ['LEITE_CONDENSADO', 790],
+      ['CREME_LEITE', 200],
+      ['CACAU', 50],
+      ['MANTEIGA', 20],
+    ],
+  },
+  {
+    chave: 'BRIGADEIRO_BRANCO',
+    nome: 'Brigadeiro branco',
+    rendimento: 1000,
+    unidadeRendimento: 'G',
+    vendavel: false,
+    usoPorLote: 0.1,
+    embalagemPorUnidade: 0,
+    perdaPercentual: 0,
+    lucroPercentual: null,
+    itens: [
+      ['LEITE_CONDENSADO', 790],
+      ['CREME_LEITE', 200],
+      ['MANTEIGA', 20],
+      ['LEITE_NINHO', 30],
+    ],
+  },
+  {
+    chave: 'BROWNIE',
+    nome: 'Brownie',
+    rendimento: 20,
+    usoPorLote: 0.5,
+    embalagemPorUnidade: 0,
+    perdaPercentual: 0.05,
+    lucroPercentual: null,
+    itens: [
+      ['FARINHA', 0.2],
+      ['ACUCAR', 0.3],
+      ['MANTEIGA', 200],
+      ['OVOS', 4],
+      ['CACAU', 80],
+      ['CHOC_GOTAS', 0.2],
+    ],
+  },
+  {
+    chave: 'DOIS_AMORES',
+    nome: 'Brownie Dois Amores',
+    rendimento: 1,
+    usoPorLote: 0.01,
+    embalagemPorUnidade: 1.5,
+    perdaPercentual: 0,
+    lucroPercentual: 0.25,
+    itens: [['LEITE_NINHO', 30]],
+    receitas: [
+      ['BROWNIE', 1],
+      ['BRIGADEIRO_PRETO', 150],
+      ['BRIGADEIRO_BRANCO', 150],
     ],
   },
 ];
@@ -452,6 +548,8 @@ async function limparEmpresa(tx: Tx, empresaId: number): Promise<void> {
   await tx.movimentacaoProdutoAcabado.deleteMany({ where: { empresaId } });
   await tx.estoqueProdutoAcabado.deleteMany({ where: { empresaId } });
   await tx.producao.deleteMany({ where: { empresaId } }); // rateios em CASCADE
+  // As receitas usadas dentro de outras são RESTRICT (BE-39): saem antes.
+  await tx.itemReceitaReceita.deleteMany({ where: { receita: { empresaId } } });
   await tx.receita.deleteMany({ where: { empresaId } }); // itens em CASCADE
   await tx.movimentacaoEstoque.deleteMany({ where: { empresaId } });
   await tx.estoque.deleteMany({ where: { empresaId } });
@@ -596,13 +694,19 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
     string,
     { id: number; def: (typeof RECEITAS)[number] }
   >();
+  const receita = (chave: string) => {
+    const r = receitas.get(chave);
+    if (!r) throw new Error(`Receita desconhecida no seed: ${chave}`);
+    return r;
+  };
   for (const def of RECEITAS) {
     const criada = await tx.receita.create({
       data: {
         empresaId,
         nome: def.nome,
         rendimento: def.rendimento,
-        unidadeRendimento: 'UN',
+        unidadeRendimento: def.unidadeRendimento ?? 'UN',
+        vendavel: def.vendavel ?? true,
         usoPorLote: def.usoPorLote,
         embalagemPorUnidade: def.embalagemPorUnidade,
         perdaPercentual: def.perdaPercentual,
@@ -614,15 +718,16 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
             quantidade,
           })),
         },
+        receitasUsadas: {
+          create: (def.receitas ?? []).map(([chave, quantidade]) => ({
+            receitaUsadaId: receita(chave).id,
+            quantidade,
+          })),
+        },
       },
     });
     receitas.set(def.chave, { id: criada.id, def });
   }
-  const receita = (chave: string) => {
-    const r = receitas.get(chave);
-    if (!r) throw new Error(`Receita desconhecida no seed: ${chave}`);
-    return r;
-  };
   const custoDe = (chave: string, base: 'medio' | 'reposicao') => {
     const { def } = receita(chave);
     return calcularCustoReceita({

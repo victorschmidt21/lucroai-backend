@@ -69,3 +69,26 @@ export function calcularProducao(
   const custoUnitario = totalUnidades > 0 ? custoTotal / totalUnidades : 0;
   return { totalUnidades, custoTotal, custoUnitario, rateios };
 }
+
+/** Receita usada dentro da produzida, por lote (BE-41). */
+export interface ReceitaUsadaPorLote<U extends string = string> {
+  receitaId: number;
+  nome: string;
+  quantidade: number;
+  unidade: U;
+}
+
+/**
+ * O que sai do estoque pronto de cada receita usada numa produção de `lotes`
+ * lotes (BE-41): `quantidade por lote × lotes`, na unidade do rendimento dela.
+ * O custo dela já está no `ingredientesLote` (BE-40); aqui é só a quantidade.
+ */
+export function calcularReceitasUsadas<U extends string>(
+  receitas: ReceitaUsadaPorLote<U>[],
+  lotes: number,
+): ReceitaUsadaPorLote<U>[] {
+  return receitas.map((receita) => ({
+    ...receita,
+    quantidade: receita.quantidade * lotes,
+  }));
+}

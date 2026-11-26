@@ -1,10 +1,27 @@
 import { round6 } from '../../../shared/domain/arredondamento.js';
+import { BusinessRuleError } from '../../../shared/domain/errors/domain.error.js';
 import {
   calcularMargemContribuicao,
   MOTIVO_MARGEM_NEGATIVA,
   MOTIVO_SEM_VENDAS,
   type MotivoSemPontoEquilibrio,
 } from '../../receitas/domain/receitas.calculos.js';
+
+/**
+ * A receita marcada como não vendida sozinha (`vendavel: false`, BE-39) só
+ * serve dentro de outras: vendê-la → 422 `RECEITA_NAO_VENDIDA_SOZINHA` (BE-41).
+ */
+export function validarReceitaVendavel(receita: {
+  nome: string;
+  vendavel: boolean;
+}): void {
+  if (!receita.vendavel) {
+    throw new BusinessRuleError(
+      'RECEITA_NAO_VENDIDA_SOZINHA',
+      `A receita ${receita.nome} não é vendida sozinha: ela só é usada dentro de outras receitas`,
+    );
+  }
+}
 
 /** Janela do mix de vendas do ponto de equilíbrio da empresa (BE-31). */
 export const DIAS_PONTO_EQUILIBRIO = 30;

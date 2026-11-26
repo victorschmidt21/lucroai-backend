@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import {
+  BusinessRuleError,
+  ConflictError,
+  InvalidInputError,
+} from '../../../shared/domain/errors/domain.error.js';
 import { round4 } from '../../../shared/domain/arredondamento.js';
 import type { GastoParaCusto } from '../../gastos-indiretos/domain/gastos-indiretos.calculos.js';
 import {
   calcularCustoInvisivel,
   calcularCustoItem,
+  calcularCustoParaUsoEmReceita,
   calcularCustoReceita,
   calcularCustoUnitario,
   calcularMargemContribuicao,
@@ -22,7 +28,10 @@ import {
   somarGastosMensaisLote,
   somarGastosPercentuais,
   somarGastosPorUnidade,
+  validarExclusaoDaReceita,
   validarFichaTecnica,
+  validarItensDaReceita,
+  validarMudancaDeUnidade,
 } from './receitas.calculos.js';
 
 // Insumos e gastos do seed dos microsserviços (catalog-service). As fórmulas
@@ -384,6 +393,7 @@ describe('calcularCustoReceita', () => {
           custoCalculado: expect.closeTo(0.255, P),
         },
       ],
+      receitas: [],
       lotes: 1,
       totalUnidades: 50,
       custoIngredientes: expect.closeTo(3.305, P),
@@ -920,3 +930,263 @@ describe('compatibilidade com margem_lucro', () => {
     expect(lucroPercentualInformado({})).toBeUndefined();
   });
 });
+
+describe('validarItensDaReceita (BE-39)', () => {
+  // Brownie Dois Amores (id 4) usa brownie (1), brigadeiro preto (2) e
+  // brigadeiro branco (3), que só têm ingredientes, e leite Ninho.
+  const doisAmores = {
+    receitaId: 4,
+    quantidadeInsumos: 1,
+    receitaUsadaIds: [1, 2, 3],
+    usadas: [1, 2, 3].map((id) => ({ id, temReceitas: false })),
+    usadaEmOutra: false,
+  };
+
+  it('aceita receitas só com ingredientes, no cadastro e na edição', () => {
+    expect(() => validarItensDaReceita(doisAmores)).not.toThrow();
+    expect(() =>
+      validarItensDaReceita({ ...doisAmores, receitaId: null }),
+    ).not.toThrow();
+  });
+
+  it('aceita receita só com receitas ou só com insumos', () => {
+    expect(() =>
+      validarItensDaReceita({ ...doisAmores, quantidadeInsumos: 0 }),
+    ).not.toThrow();
+    expect(() =>
+      validarItensDaReceita({
+        ...doisAmores,
+        receitaUsadaIds: [],
+        usadas: [],
+        usadaEmOutra: true,
+      }),
+    ).not.toThrow();
+  });
+
+  it('sem nenhum item → 400', () => {
+    expect(() =>
+      validarItensDaReceita({
+        ...doisAmores,
+        quantidadeInsumos: 0,
+        receitaUsadaIds: [],
+        usadas: [],
+      }),
+    ).toThrow(InvalidInputError);
+  });
+
+  it('receita repetida na lista → 400 DADOS_INVALIDOS', () => {
+    const erro = capturar(() =>
+      validarItensDaReceita({ ...doisAmores, receitaUsadaIds: [1, 2, 1] }),
+    );
+    expect(erro).toBeInstanceOf(InvalidInputError);
+    expect(erro).toMatchObject({
+      code: 'DADOS_INVALIDOS',
+      details: [{ field: 'receitas' }],
+    });
+  });
+
+  it('a receita usando ela mesma → 422 RECEITA_USA_ELA_MESMA', () => {
+    const erro = capturar(() =>
+      validarItensDaReceita({
+        ...doisAmores,
+        receitaUsadaIds: [1, 4],
+        usadas: [
+          { id: 1, temReceitas: false },
+          { id: 4, temReceitas: true },
+        ],
+      }),
+    );
+    expect(erro).toBeInstanceOf(BusinessRuleError);
+    expect(erro).toMatchObject({ code: 'RECEITA_USA_ELA_MESMA' });
+  });
+
+  it('usar receita que já tem receitas dentro → 422 (um nível só)', () => {
+    const erro = capturar(() =>
+      validarItensDaReceita({
+        ...doisAmores,
+        receitaId: null,
+        receitaUsadaIds: [4],
+        usadas: [{ id: 4, temReceitas: true }],
+      }),
+    );
+    expect(erro).toBeInstanceOf(BusinessRuleError);
+    expect(erro).toMatchObject({
+      code: 'RECEITA_DENTRO_DE_RECEITA_COM_RECEITA',
+    });
+  });
+
+  it('receita já usada em outra ganhando receitas → 422 (um nível só)', () => {
+    const erro = capturar(() =>
+      validarItensDaReceita({ ...doisAmores, usadaEmOutra: true }),
+    );
+    expect(erro).toBeInstanceOf(BusinessRuleError);
+    expect(erro).toMatchObject({
+      code: 'RECEITA_DENTRO_DE_RECEITA_COM_RECEITA',
+    });
+  });
+});
+
+describe('validarExclusaoDaReceita (BE-39)', () => {
+  it('receita que ninguém usa pode ser excluída', () => {
+    expect(() => validarExclusaoDaReceita([])).not.toThrow();
+  });
+
+  it('receita usada em outras → 409 RECEITA_EM_USO com os nomes', () => {
+    const erro = capturar(() =>
+      validarExclusaoDaReceita(['Brownie Dois Amores', 'Bolo de pote']),
+    );
+    expect(erro).toBeInstanceOf(ConflictError);
+    expect(erro).toMatchObject({ code: 'RECEITA_EM_USO' });
+    expect((erro as Error).message).toContain(
+      'Brownie Dois Amores, Bolo de pote',
+    );
+  });
+});
+
+describe('validarMudancaDeUnidade (BE-39)', () => {
+  it('a unidade igual ou omitida passa, mesmo com a receita em uso', () => {
+    expect(() =>
+      validarMudancaDeUnidade('G', 'G', ['Dois Amores']),
+    ).not.toThrow();
+    expect(() =>
+      validarMudancaDeUnidade('G', undefined, ['Dois Amores']),
+    ).not.toThrow();
+  });
+
+  it('a unidade muda à vontade se ninguém usa a receita', () => {
+    expect(() => validarMudancaDeUnidade('G', 'KG', [])).not.toThrow();
+  });
+
+  it('mudar a unidade de receita usada em outra → 409 RECEITA_EM_USO', () => {
+    const erro = capturar(() =>
+      validarMudancaDeUnidade('G', 'KG', ['Brownie Dois Amores']),
+    );
+    expect(erro).toBeInstanceOf(ConflictError);
+    expect(erro).toMatchObject({ code: 'RECEITA_EM_USO' });
+  });
+});
+
+describe('receita dentro de receita: custo (BE-40)', () => {
+  // Forno de R$ 500 no mês, capacidade de 100 fornadas: R$ 5 por fornada.
+  const forno: GastoParaCusto[] = [{ valor: 500, tipo: 'MENSAL' }];
+  const brigadeiro = {
+    // R$ 30 de ingredientes por lote.
+    itens: [
+      { insumoId: 1, quantidade: 1, custoUnitario: 20 },
+      { insumoId: 2, quantidade: 0.5, custoUnitario: 20 },
+    ],
+    rendimento: 1000,
+    usoPorLote: 1,
+    perdaPercentual: 0,
+    gastos: forno,
+    capacidadeMensal: 100,
+  };
+
+  it('ingredientes de R$ 30 + forno de R$ 5, rendendo 1000 g, custam R$ 0,035/g', () => {
+    expect(calcularCustoParaUsoEmReceita(brigadeiro)).toBeCloseTo(0.035, 10);
+  });
+
+  it('a perda aumenta o custo de cada grama boa', () => {
+    expect(
+      calcularCustoParaUsoEmReceita({ ...brigadeiro, perdaPercentual: 0.3 }),
+    ).toBeCloseTo(0.035 / 0.7, 10);
+  });
+
+  it('o forno segue o uso por lote da receita usada', () => {
+    expect(
+      calcularCustoParaUsoEmReceita({ ...brigadeiro, usoPorLote: 2 }),
+    ).toBeCloseTo((30 + 10) / 1000, 10);
+  });
+
+  it('a embalagem e os gastos POR_UNIDADE do brigadeiro não entram', () => {
+    expect(
+      calcularCustoParaUsoEmReceita({
+        ...brigadeiro,
+        embalagemPorUnidade: 1.5,
+        gastos: [...forno, { valor: 0.1, tipo: 'POR_UNIDADE' }],
+      }),
+    ).toBeCloseTo(0.035, 10);
+  });
+
+  it('150 g de brigadeiro somam R$ 5,25 aos ingredientes do Brownie Dois Amores', () => {
+    const doisAmores = {
+      itens: [{ insumoId: 9, quantidade: 0.03, custoUnitario: 50 }],
+      rendimento: 1,
+      gastos: [],
+      capacidadeMensal: 100,
+    };
+    const sem = calcularCustoReceita(doisAmores);
+    const com = calcularCustoReceita({
+      ...doisAmores,
+      receitas: [
+        {
+          receitaId: 2,
+          quantidade: 150,
+          custoUnitario: calcularCustoParaUsoEmReceita(brigadeiro),
+        },
+      ],
+    });
+    expect(com.detalhe.ingredientesLote).toBeCloseTo(1.5 + 5.25, 10);
+    expect(
+      com.detalhe.ingredientesLote - sem.detalhe.ingredientesLote,
+    ).toBeCloseTo(5.25, 10);
+    expect(com.receitas).toEqual([
+      {
+        receitaId: 2,
+        quantidade: 150,
+        custoUnitario: expect.closeTo(0.035, 10),
+        custoCalculado: expect.closeTo(5.25, 10),
+      },
+    ]);
+    expect(com.custoUnitario).toBeCloseTo(6.75, 10);
+  });
+
+  it('o custo da receita usada multiplica pelos lotes, como os insumos', () => {
+    const custo = calcularCustoReceita({
+      itens: [],
+      receitas: [{ receitaId: 2, quantidade: 150, custoUnitario: 0.035 }],
+      rendimento: 1,
+      gastos: [],
+      capacidadeMensal: 100,
+      lotes: 3,
+    });
+    expect(custo.receitas[0]?.quantidade).toBe(450);
+    expect(custo.custoIngredientes).toBeCloseTo(15.75, 10);
+    expect(custo.custoProducao).toBeCloseTo(15.75, 10);
+  });
+
+  it('mudar o preço de um insumo do brigadeiro muda o custo do Dois Amores', () => {
+    const doisAmores = (custoDoChocolate: number) =>
+      calcularCustoReceita({
+        itens: [],
+        receitas: [
+          {
+            receitaId: 2,
+            quantidade: 150,
+            custoUnitario: calcularCustoParaUsoEmReceita({
+              ...brigadeiro,
+              itens: [
+                { insumoId: 1, quantidade: 1, custoUnitario: custoDoChocolate },
+                { insumoId: 2, quantidade: 0.5, custoUnitario: 20 },
+              ],
+            }),
+          },
+        ],
+        rendimento: 1,
+        gastos: [],
+        capacidadeMensal: 100,
+      }).custoUnitario;
+    expect(doisAmores(20)).toBeCloseTo(5.25, 10);
+    // Chocolate de R$ 20 para R$ 30: +R$ 10 no lote de 1000 g → +R$ 1,50 em 150 g.
+    expect(doisAmores(30)).toBeCloseTo(6.75, 10);
+  });
+});
+
+function capturar(fn: () => void): unknown {
+  try {
+    fn();
+  } catch (erro) {
+    return erro;
+  }
+  throw new Error('era esperado um erro');
+}
