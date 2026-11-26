@@ -383,7 +383,7 @@ const RECEITAS: {
     embalagemPorUnidade: 1.5,
     perdaPercentual: 0,
     lucroPercentual: 0.25,
-    itens: [['LEITE_NINHO', 10]],
+    itens: [['LEITE_NINHO', 30]],
     receitas: [
       ['BROWNIE', 1],
       ['BRIGADEIRO_PRETO', 150],
