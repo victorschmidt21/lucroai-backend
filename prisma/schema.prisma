@@ -366,6 +366,8 @@ model Producao {
   /// RESTRICT: receita com produção não pode ser excluída
   receita Receita          @relation(fields: [receitaId], references: [id], onDelete: Restrict)
   rateios RateioProducao[]
+  /// Receitas usadas dentro da produzida que saíram do estoque pronto (BE-41)
+  receitasUsadas ReceitaUsadaProducao[]
 
   @@index([empresaId, receitaId])
   @@map("producao")
@@ -386,6 +388,24 @@ model RateioProducao {
   @@index([producaoId])
   @@index([gastoIndiretoId])
   @@map("rateio_producao")
+}
+
+/// Receita usada dentro da produzida (BE-41): o que saiu do estoque pronto
+/// dela, com o nome e a unidade copiados na hora da produção.
+model ReceitaUsadaProducao {
+  id         Int           @id @default(autoincrement())
+  producaoId Int           @map("producao_id")
+  /// Sem FK, como o gastoIndiretoId do rateio: fica mesmo se a receita for excluída
+  receitaId  Int           @map("receita_id")
+  nome       String        @db.VarChar(80)
+  /// quantidade por lote × lotes, na unidade do rendimento da receita usada
+  quantidade Float
+  unidade    UnidadeMedida
+
+  producao Producao @relation(fields: [producaoId], references: [id], onDelete: Cascade)
+
+  @@index([producaoId])
+  @@map("receita_usada_producao")
 }
 
 // ---------- vendas ----------
