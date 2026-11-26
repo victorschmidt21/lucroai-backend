@@ -106,6 +106,20 @@ const receitaNovaSchema = receitaSchema.extend({
   ),
 });
 
+/** Receita dentro de receita (BE-39). */
+const receitaComReceitasSchema = receitaNovaSchema.extend({
+  vendavel: z.boolean(),
+  receitas: z.array(
+    z.object({
+      receitaId: z.number().int(),
+      nome: z.string(),
+      quantidade: z.number(),
+      unidade: z.string(),
+    }),
+  ),
+  usadaEm: z.array(z.object({ receitaId: z.number().int(), nome: z.string() })),
+});
+
 /** Canal e lucro real da venda (BE-30), ao lado da `margemRealizada` legada. */
 const vendaNovaSchema = vendaSchema.extend({
   canalId: z.number().int().nullable(),
@@ -1134,6 +1148,140 @@ describe('Contrato com o frontend (e2e)', () => {
       );
 
       await comA('delete', `/canais/${canal.id}`).expect(204);
+    });
+  });
+
+  describe('8. receita dentro de receita (BE-39)', () => {
+    it('cria o Brownie Dois Amores e barra exclusão, um nível e ela mesma', async () => {
+      const criar = (corpo: object) => comA('post', '/receitas').send(corpo);
+      const brigadeiro = (nome: string) =>
+        criar({
+          nome,
+          rendimento: 1000,
+          unidadeRendimento: 'G',
+          vendavel: false,
+          insumos: [{ insumo_id: acucarId, quantidade: 0.4 }],
+        }).expect(201);
+      const preto = validar(
+        receitaComReceitasSchema,
+        (await brigadeiro('Brigadeiro preto')).body,
+      );
+      const branco = validar(
+        receitaComReceitasSchema,
+        (await brigadeiro('Brigadeiro branco')).body,
+      );
+      expect(preto.vendavel).toBe(false);
+      const brownieRes = await criar({
+        nome: 'Brownie',
+        rendimento: 20,
+        unidadeRendimento: 'UN',
+        insumos: [{ insumo_id: farinhaId, quantidade: 0.3 }],
+      }).expect(201);
+      const brownie = validar(receitaComReceitasSchema, brownieRes.body);
+      expect(brownie).toMatchObject({ vendavel: true, receitas: [] });
+
+      const doisAmoresRes = await criar({
+        nome: 'Brownie Dois Amores',
+        rendimento: 1,
+        unidadeRendimento: 'UN',
+        insumos: [{ insumo_id: acucarId, quantidade: 0.03 }],
+        receitas: [
+          { receita_id: brownie.id, quantidade: 1 },
+          { receita_id: preto.id, quantidade: 150 },
+          { receita_id: branco.id, quantidade: 150 },
+        ],
+      }).expect(201);
+      const doisAmores = validar(receitaComReceitasSchema, doisAmoresRes.body);
+      expect(doisAmores.itens).toHaveLength(1);
+      expect(doisAmores.receitas).toEqual([
+        {
+          receitaId: brownie.id,
+          nome: 'Brownie',
+          quantidade: 1,
+          unidade: 'UN',
+        },
+        {
+          receitaId: preto.id,
+          nome: 'Brigadeiro preto',
+          quantidade: 150,
+          unidade: 'G',
+        },
+        {
+          receitaId: branco.id,
+          nome: 'Brigadeiro branco',
+          quantidade: 150,
+          unidade: 'G',
+        },
+      ]);
+      const lido = await comA('get', `/receitas/${branco.id}`).expect(200);
+      expect(validar(receitaComReceitasSchema, lido.body).usadaEm).toEqual([
+        { receitaId: doisAmores.id, nome: 'Brownie Dois Amores' },
+      ]);
+
+      // Excluir a receita usada → 409 com o nome de quem usa.
+      const emUso = await comA('delete', `/receitas/${branco.id}`).expect(409);
+      const erro = validar(erroSchema, emUso.body);
+      expect(erro.code).toBe('RECEITA_EM_USO');
+      expect(erro.message).toContain('Brownie Dois Amores');
+      await comA('get', `/receitas/${branco.id}`).expect(200);
+
+      // Um nível só: usar quem tem receitas, ou dar receitas a quem é usada.
+      const umNivel = await criar({
+        nome: 'Caixa de brownies',
+        rendimento: 1,
+        unidadeRendimento: 'UN',
+        receitas: [{ receita_id: doisAmores.id, quantidade: 2 }],
+      }).expect(422);
+      expect(validar(erroSchema, umNivel.body).code).toBe(
+        'RECEITA_DENTRO_DE_RECEITA_COM_RECEITA',
+      );
+      await comA('put', `/receitas/${preto.id}`)
+        .send({ receitas: [{ receita_id: brownie.id, quantidade: 1 }] })
+        .expect(422);
+      const elaMesma = await comA('put', `/receitas/${doisAmores.id}`)
+        .send({ receitas: [{ receita_id: doisAmores.id, quantidade: 1 }] })
+        .expect(422);
+      expect(validar(erroSchema, elaMesma.body).code).toBe(
+        'RECEITA_USA_ELA_MESMA',
+      );
+      await comA('put', `/receitas/${doisAmores.id}`)
+        .send({
+          receitas: [
+            { receita_id: preto.id, quantidade: 1 },
+            { receita_id: preto.id, quantidade: 2 },
+          ],
+        })
+        .expect(400);
+      const unidade = await comA('put', `/receitas/${preto.id}`)
+        .send({ unidadeRendimento: 'KG' })
+        .expect(409);
+      expect(validar(erroSchema, unidade.body).code).toBe('RECEITA_EM_USO');
+
+      // Receita de outra empresa → 404; sem item nenhum → 400.
+      const alheia = await comB('post', '/receitas')
+        .send({
+          nome: 'Alheia',
+          rendimento: 1,
+          unidadeRendimento: 'UN',
+          receitas: [{ receita_id: preto.id, quantidade: 1 }],
+        })
+        .expect(404);
+      expect(validar(erroSchema, alheia.body).code).toBe(
+        'RECEITA_NAO_ENCONTRADA',
+      );
+      await criar({
+        nome: 'Vazia',
+        rendimento: 1,
+        unidadeRendimento: 'UN',
+      }).expect(400);
+
+      // PUT sem `receitas` mantém as salvas; sem uso, a exclusão volta a valer.
+      const editado = await comA('put', `/receitas/${doisAmores.id}`)
+        .send({ nome: 'Brownie Dois Amores especial' })
+        .expect(200);
+      expect(editado.body.receitas).toHaveLength(3);
+      await comA('delete', `/receitas/${doisAmores.id}`).expect(204);
+      await comA('delete', `/receitas/${branco.id}`).expect(204);
     });
   });
 
