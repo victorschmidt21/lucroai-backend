@@ -1,4 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import {
+  BusinessRuleError,
+  ConflictError,
+  InvalidInputError,
+} from '../../../shared/domain/errors/domain.error.js';
 import { round4 } from '../../../shared/domain/arredondamento.js';
 import type { GastoParaCusto } from '../../gastos-indiretos/domain/gastos-indiretos.calculos.js';
 import {
@@ -22,7 +27,10 @@ import {
   somarGastosMensaisLote,
   somarGastosPercentuais,
   somarGastosPorUnidade,
+  validarExclusaoDaReceita,
   validarFichaTecnica,
+  validarItensDaReceita,
+  validarMudancaDeUnidade,
 } from './receitas.calculos.js';
 
 // Insumos e gastos do seed dos microsserviços (catalog-service). As fórmulas
@@ -920,3 +928,147 @@ describe('compatibilidade com margem_lucro', () => {
     expect(lucroPercentualInformado({})).toBeUndefined();
   });
 });
+
+describe('validarItensDaReceita (BE-39)', () => {
+  // Brownie Dois Amores (id 4) usa brownie (1), brigadeiro preto (2) e
+  // brigadeiro branco (3), que só têm ingredientes, e leite Ninho.
+  const doisAmores = {
+    receitaId: 4,
+    quantidadeInsumos: 1,
+    receitaUsadaIds: [1, 2, 3],
+    usadas: [1, 2, 3].map((id) => ({ id, temReceitas: false })),
+    usadaEmOutra: false,
+  };
+
+  it('aceita receitas só com ingredientes, no cadastro e na edição', () => {
+    expect(() => validarItensDaReceita(doisAmores)).not.toThrow();
+    expect(() =>
+      validarItensDaReceita({ ...doisAmores, receitaId: null }),
+    ).not.toThrow();
+  });
+
+  it('aceita receita só com receitas ou só com insumos', () => {
+    expect(() =>
+      validarItensDaReceita({ ...doisAmores, quantidadeInsumos: 0 }),
+    ).not.toThrow();
+    expect(() =>
+      validarItensDaReceita({
+        ...doisAmores,
+        receitaUsadaIds: [],
+        usadas: [],
+        usadaEmOutra: true,
+      }),
+    ).not.toThrow();
+  });
+
+  it('sem nenhum item → 400', () => {
+    expect(() =>
+      validarItensDaReceita({
+        ...doisAmores,
+        quantidadeInsumos: 0,
+        receitaUsadaIds: [],
+        usadas: [],
+      }),
+    ).toThrow(InvalidInputError);
+  });
+
+  it('receita repetida na lista → 400 DADOS_INVALIDOS', () => {
+    const erro = capturar(() =>
+      validarItensDaReceita({ ...doisAmores, receitaUsadaIds: [1, 2, 1] }),
+    );
+    expect(erro).toBeInstanceOf(InvalidInputError);
+    expect(erro).toMatchObject({
+      code: 'DADOS_INVALIDOS',
+      details: [{ field: 'receitas' }],
+    });
+  });
+
+  it('a receita usando ela mesma → 422 RECEITA_USA_ELA_MESMA', () => {
+    const erro = capturar(() =>
+      validarItensDaReceita({
+        ...doisAmores,
+        receitaUsadaIds: [1, 4],
+        usadas: [
+          { id: 1, temReceitas: false },
+          { id: 4, temReceitas: true },
+        ],
+      }),
+    );
+    expect(erro).toBeInstanceOf(BusinessRuleError);
+    expect(erro).toMatchObject({ code: 'RECEITA_USA_ELA_MESMA' });
+  });
+
+  it('usar receita que já tem receitas dentro → 422 (um nível só)', () => {
+    const erro = capturar(() =>
+      validarItensDaReceita({
+        ...doisAmores,
+        receitaId: null,
+        receitaUsadaIds: [4],
+        usadas: [{ id: 4, temReceitas: true }],
+      }),
+    );
+    expect(erro).toBeInstanceOf(BusinessRuleError);
+    expect(erro).toMatchObject({
+      code: 'RECEITA_DENTRO_DE_RECEITA_COM_RECEITA',
+    });
+  });
+
+  it('receita já usada em outra ganhando receitas → 422 (um nível só)', () => {
+    const erro = capturar(() =>
+      validarItensDaReceita({ ...doisAmores, usadaEmOutra: true }),
+    );
+    expect(erro).toBeInstanceOf(BusinessRuleError);
+    expect(erro).toMatchObject({
+      code: 'RECEITA_DENTRO_DE_RECEITA_COM_RECEITA',
+    });
+  });
+});
+
+describe('validarExclusaoDaReceita (BE-39)', () => {
+  it('receita que ninguém usa pode ser excluída', () => {
+    expect(() => validarExclusaoDaReceita([])).not.toThrow();
+  });
+
+  it('receita usada em outras → 409 RECEITA_EM_USO com os nomes', () => {
+    const erro = capturar(() =>
+      validarExclusaoDaReceita(['Brownie Dois Amores', 'Bolo de pote']),
+    );
+    expect(erro).toBeInstanceOf(ConflictError);
+    expect(erro).toMatchObject({ code: 'RECEITA_EM_USO' });
+    expect((erro as Error).message).toContain(
+      'Brownie Dois Amores, Bolo de pote',
+    );
+  });
+});
+
+describe('validarMudancaDeUnidade (BE-39)', () => {
+  it('a unidade igual ou omitida passa, mesmo com a receita em uso', () => {
+    expect(() =>
+      validarMudancaDeUnidade('G', 'G', ['Dois Amores']),
+    ).not.toThrow();
+    expect(() =>
+      validarMudancaDeUnidade('G', undefined, ['Dois Amores']),
+    ).not.toThrow();
+  });
+
+  it('a unidade muda à vontade se ninguém usa a receita', () => {
+    expect(() => validarMudancaDeUnidade('G', 'KG', [])).not.toThrow();
+  });
+
+  it('mudar a unidade de receita usada em outra → 409 RECEITA_EM_USO', () => {
+    const erro = capturar(() =>
+      validarMudancaDeUnidade('G', 'KG', ['Brownie Dois Amores']),
+    );
+    expect(erro).toBeInstanceOf(ConflictError);
+    expect(erro).toMatchObject({ code: 'RECEITA_EM_USO' });
+  });
+});
+
+function capturar(fn: () => void): unknown {
+  try {
+    fn();
+  } catch (erro) {
+    return erro;
+  }
+  throw new Error('era esperado um erro');
+}

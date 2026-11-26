@@ -19,9 +19,15 @@ import {
   simularCenario,
   somarGastosMensais,
   somarGastosPercentuais,
+  validarExclusaoDaReceita,
   validarFichaTecnica,
+  validarItensDaReceita,
+  validarMudancaDeUnidade,
 } from '../../domain/receitas.calculos.js';
-import { ReceitaRepository } from '../../infra/repositories/receita.repository.js';
+import {
+  type ItemReceitaData,
+  ReceitaRepository,
+} from '../../infra/repositories/receita.repository.js';
 import type { CreateReceitaDto } from '../dto/create-receita.dto.js';
 import {
   type PrecoVendaBodyDto,
@@ -92,6 +98,11 @@ interface ItemEntrada {
   quantidade: number;
 }
 
+interface ReceitaEntrada {
+  receita_id: number;
+  quantidade: number;
+}
+
 @Injectable()
 export class ReceitaService {
   constructor(
@@ -117,13 +128,19 @@ export class ReceitaService {
     return this.toDto(row, await this.contextoDe(row, empresaId));
   }
 
-  /** Campos da ficha técnica omitidos assumem os padrões (BE-27). */
+  /**
+   * Campos da ficha técnica omitidos assumem os padrões (BE-27); `insumos` e
+   * `receitas` omitidos são `[]`, e `vendavel` omitido é `true` (BE-39).
+   */
   async create(dto: CreateReceitaDto, empresaId: number): Promise<ReceitaDto> {
     const ficha = resolverFichaTecnica(this.fichaInformada(dto));
     validarFichaTecnica(ficha);
+    const insumos = (dto.insumos ?? []).map(toItemData);
+    const receitas = (dto.receitas ?? []).map(toItemReceitaData);
+    await this.validarItens(null, insumos.length, receitas, false, empresaId);
     // Antes de gravar: 404 se algum insumo não for da empresa.
     const contexto = await this.contexto(
-      dto.insumos.map((item) => item.insumo_id),
+      insumos.map((item) => item.insumoId),
       empresaId,
     );
     const row = await this.repository.create(
@@ -132,9 +149,11 @@ export class ReceitaService {
         nome: dto.nome,
         rendimento: dto.rendimento,
         unidadeRendimento: dto.unidadeRendimento,
+        vendavel: dto.vendavel ?? true,
         ...ficha,
       },
-      dto.insumos.map(toItemData),
+      insumos,
+      receitas,
     );
     return this.toDto(row, contexto);
   }
@@ -158,6 +177,25 @@ export class ReceitaService {
         insumoId: item.insumoId,
         quantidade: item.quantidade,
       }));
+    const receitas =
+      dto.receitas?.map(toItemReceitaData) ??
+      atual.receitasUsadas.map((item) => ({
+        receitaUsadaId: item.receitaUsadaId,
+        quantidade: item.quantidade,
+      }));
+    const usadaEm = atual.usadaEm.map(({ receita }) => receita.nome);
+    validarMudancaDeUnidade(
+      atual.unidadeRendimento,
+      dto.unidadeRendimento ?? undefined,
+      usadaEm,
+    );
+    await this.validarItens(
+      id,
+      insumos.length,
+      receitas,
+      usadaEm.length > 0,
+      empresaId,
+    );
     const contexto = await this.contexto(
       insumos.map((item) => item.insumoId),
       empresaId,
@@ -168,15 +206,19 @@ export class ReceitaService {
         nome: dto.nome ?? undefined,
         rendimento: dto.rendimento ?? undefined,
         unidadeRendimento: dto.unidadeRendimento ?? undefined,
+        vendavel: dto.vendavel ?? undefined,
         ...ficha,
       },
       dto.insumos ? insumos : undefined,
+      dto.receitas ? receitas : undefined,
     );
     return this.toDto(row, contexto);
   }
 
+  /** Receita usada dentro de outra → 409 `RECEITA_EM_USO` com os nomes (BE-39). */
   async delete(id: number, empresaId: number): Promise<void> {
-    await this.getOrFail(id, empresaId);
+    const atual = await this.getOrFail(id, empresaId);
+    validarExclusaoDaReceita(atual.usadaEm.map(({ receita }) => receita.nome));
     await this.repository.delete(id);
   }
 
@@ -283,6 +325,35 @@ export class ReceitaService {
           this.calcular(row, contexto, 1, contexto.custoMedioPorInsumo),
         ),
       };
+    });
+  }
+
+  /**
+   * Receitas usadas (BE-39): 404 se alguma não for da empresa; depois as
+   * regras de `validarItensDaReceita` (repetida, ela mesma, um nível só).
+   */
+  private async validarItens(
+    receitaId: number | null,
+    quantidadeInsumos: number,
+    receitas: ItemReceitaData[],
+    usadaEmOutra: boolean,
+    empresaId: number,
+  ): Promise<void> {
+    const ids = receitas.map((item) => item.receitaUsadaId);
+    const unicos = [...new Set(ids)];
+    const usadas = await this.repository.findParaUso(unicos, empresaId);
+    if (usadas.length !== unicos.length) {
+      throw new NotFoundError(
+        'RECEITA_NAO_ENCONTRADA',
+        'Receita não encontrada',
+      );
+    }
+    validarItensDaReceita({
+      receitaId,
+      quantidadeInsumos,
+      receitaUsadaIds: ids,
+      usadas,
+      usadaEmOutra,
     });
   }
 
@@ -432,6 +503,10 @@ export class ReceitaService {
     }
     return row;
   }
+}
+
+function toItemReceitaData(item: ReceitaEntrada): ItemReceitaData {
+  return { receitaUsadaId: item.receita_id, quantidade: item.quantidade };
 }
 
 function toItemData(item: ItemEntrada): {

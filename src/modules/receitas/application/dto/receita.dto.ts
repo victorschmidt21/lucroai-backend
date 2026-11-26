@@ -1,5 +1,6 @@
 import type {
   ItemReceita,
+  ItemReceitaReceita,
   Receita,
   UnidadeMedida,
 } from '../../../../generated/prisma/client.js';
@@ -21,6 +22,26 @@ export class ItemReceitaDto {
   quantidade: number;
   /** `quantidade × custo de reposição do insumo` (BE-29), com 2 casas. @example 0.75 */
   custoCalculado?: number;
+}
+
+/** Receita usada dentro desta (BE-39). */
+export class ItemReceitaReceitaDto {
+  /** @example 2 */
+  receitaId: number;
+  /** @example 'Brigadeiro preto' */
+  nome: string;
+  /** Por lote, na unidade do rendimento da receita usada. @example 150 */
+  quantidade: number;
+  /** `unidadeRendimento` da receita usada. @example 'G' */
+  unidade: UnidadeMedida;
+}
+
+/** Receita que usa esta dentro dela (BE-39). */
+export class UsadaEmDto {
+  /** @example 4 */
+  receitaId: number;
+  /** @example 'Brownie Dois Amores' */
+  nome: string;
 }
 
 /** De onde vem o custo de 1 unidade (BE-28). */
@@ -112,9 +133,15 @@ export class ReceitaDto {
   perdaPercentual: number;
   /** Fração do preço, com 4 casas; omitido quando a receita usa o lucro padrão da empresa. @example 0.15 */
   lucroPercentual?: number;
+  /** `false`: a receita só serve para usar dentro de outras (BE-39). @example true */
+  vendavel: boolean;
   /** @example '2026-11-19T12:00:00.000Z' */
   dataCriacao: Date;
   itens: ItemReceitaDto[];
+  /** Receitas usadas dentro desta, em ordem de inclusão (BE-39). */
+  receitas: ItemReceitaReceitaDto[];
+  /** Receitas que usam esta, por id (BE-39). */
+  usadaEm: UsadaEmDto[];
   /** Detalhamento do custo de 1 unidade (BE-28). */
   custo: CustoReceitaDetalheDto;
   /** Preço sugerido por canal ativo, em ordem de criação do canal (BE-28). */
@@ -128,7 +155,15 @@ export type PrecoDoCanal = PrecoCalculado & {
   balcao: boolean;
 };
 
-export type ReceitaComItens = Receita & { itens: ItemReceita[] };
+export type ReceitaComItens = Receita & {
+  itens: ItemReceita[];
+  /** Receitas usadas dentro desta (BE-39). */
+  receitasUsadas: (ItemReceitaReceita & {
+    receitaUsada: { nome: string; unidadeRendimento: UnidadeMedida };
+  })[];
+  /** Receitas que usam esta (BE-39). */
+  usadaEm: { receita: { id: number; nome: string } }[];
+};
 
 /**
  * Desde a BE-27 o custo não é gravado: `custo` é o de 1 lote calculado na
@@ -160,6 +195,7 @@ export function toReceitaDto(
     embalagemPorUnidade: row.embalagemPorUnidade,
     perdaPercentual: row.perdaPercentual,
     lucroPercentual: arredondarOpcional(row.lucroPercentual, round4),
+    vendavel: row.vendavel,
     dataCriacao: row.dataCriacao,
     itens: row.itens.map((item, i) => ({
       insumoId: item.insumoId,
@@ -168,6 +204,16 @@ export function toReceitaDto(
         custo.itens[i]?.custoCalculado,
         round2,
       ),
+    })),
+    receitas: row.receitasUsadas.map((item) => ({
+      receitaId: item.receitaUsadaId,
+      nome: item.receitaUsada.nome,
+      quantidade: item.quantidade,
+      unidade: item.receitaUsada.unidadeRendimento,
+    })),
+    usadaEm: row.usadaEm.map(({ receita }) => ({
+      receitaId: receita.id,
+      nome: receita.nome,
     })),
     custo: toCustoReceitaDetalheDto(custo.detalhe),
     precos: precos.map(toPrecoCanalDto),
