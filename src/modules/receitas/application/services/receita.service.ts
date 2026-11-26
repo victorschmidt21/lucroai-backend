@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { UnidadeMedida } from '../../../../generated/prisma/client.js';
 import { NotFoundError } from '../../../../shared/domain/errors/domain.error.js';
 import type { PrismaTransaction } from '../../../../shared/infra/database/prisma.transaction.js';
 import { CanalVendaService } from '../../../canais/application/services/canal-venda.service.js';
@@ -89,6 +90,17 @@ export interface PrecoSugeridoReceita {
   precoSugerido: number | null;
   /** Preço do Balcão com o custo médio: o preço que o estoque pagaria. */
   precoComCustoMedio: number | null;
+}
+
+/**
+ * Nome, unidade e `vendavel` de uma receita (BE-41), para o estoque pronto e
+ * o alerta de produto negativo.
+ */
+export interface ResumoReceita {
+  id: number;
+  nome: string;
+  unidadeRendimento: UnidadeMedida;
+  vendavel: boolean;
 }
 
 /** O Balcão, cuja taxa é a da maquininha: base do `precoSugerido` (BE-28). */
@@ -303,6 +315,17 @@ export class ReceitaService {
       custo: this.calcular(receita, contexto, 1, contexto.custoMedioPorInsumo),
       basePreco: this.basePreco(receita, contexto),
     };
+  }
+
+  /** Para o estoque pronto e os alertas (BE-41): sem calcular custo. */
+  async listarResumos(empresaId: number): Promise<ResumoReceita[]> {
+    const rows = await this.repository.listByEmpresa(empresaId);
+    return rows.map((row) => ({
+      id: row.id,
+      nome: row.nome,
+      unidadeRendimento: row.unidadeRendimento,
+      vendavel: row.vendavel,
+    }));
   }
 
   /**
