@@ -90,3 +90,52 @@ export function alertasDePrecoDefasado<U extends string>(
       })),
   }));
 }
+
+/** Saldo do estoque pronto de uma receita (BE-41). */
+export interface EstoqueProntoParaAlerta {
+  receitaId: number;
+  quantidadeDisponivel: number;
+}
+
+/** Nome e unidade de uma receita (BE-41). */
+export interface ReceitaParaAlertaDeProduto<U extends string = string> {
+  id: number;
+  nome: string;
+  unidadeRendimento: U;
+}
+
+export interface AlertaProdutoNegativo<U extends string = string> {
+  receitaId: number;
+  nome: string;
+  saldo: number;
+  unidade: U;
+}
+
+/**
+ * Receitas com o estoque pronto abaixo de zero (BE-41), por nome: a receita
+ * usada dentro de outra saiu sem a produção dela ter sido registrada. O saldo
+ * negativo é permitido; o alerta só avisa ("registre a produção do Brigadeiro
+ * branco"). Saldo de receita que não está na lista fica de fora.
+ */
+export function alertasDeProdutoNegativo<U extends string>(
+  estoques: EstoqueProntoParaAlerta[],
+  receitas: ReceitaParaAlertaDeProduto<U>[],
+): AlertaProdutoNegativo<U>[] {
+  const porId = new Map(receitas.map((receita) => [receita.id, receita]));
+  return estoques
+    .filter((estoque) => estoqueNegativo(estoque.quantidadeDisponivel))
+    .flatMap((estoque) => {
+      const receita = porId.get(estoque.receitaId);
+      return receita
+        ? [
+            {
+              receitaId: receita.id,
+              nome: receita.nome,
+              saldo: estoque.quantidadeDisponivel,
+              unidade: receita.unidadeRendimento,
+            },
+          ]
+        : [];
+    })
+    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+}

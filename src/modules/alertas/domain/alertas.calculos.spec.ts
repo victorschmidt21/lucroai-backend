@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   alertasDeEstoqueNegativo,
   alertasDePrecoDefasado,
+  alertasDeProdutoNegativo,
   type InsumoParaAlerta,
   type ReceitaParaAlerta,
 } from './alertas.calculos.js';
@@ -130,5 +131,46 @@ describe('alertasDePrecoDefasado', () => {
       [pao],
     );
     expect(alertas[0]?.receitas).toEqual([]);
+  });
+});
+
+describe('alertasDeProdutoNegativo', () => {
+  const receitas = [
+    { id: 1, nome: 'Brigadeiro preto', unidadeRendimento: 'G' },
+    { id: 2, nome: 'Brigadeiro branco', unidadeRendimento: 'G' },
+    { id: 3, nome: 'Brownie', unidadeRendimento: 'UN' },
+  ];
+
+  it('traz só as receitas com estoque pronto abaixo de zero, por nome, com saldo e unidade', () => {
+    const alertas = alertasDeProdutoNegativo(
+      [
+        { receitaId: 1, quantidadeDisponivel: 700 },
+        { receitaId: 2, quantidadeDisponivel: -300 },
+        { receitaId: 3, quantidadeDisponivel: -4 },
+      ],
+      receitas,
+    );
+    expect(alertas).toEqual([
+      { receitaId: 2, nome: 'Brigadeiro branco', saldo: -300, unidade: 'G' },
+      { receitaId: 3, nome: 'Brownie', saldo: -4, unidade: 'UN' },
+    ]);
+  });
+
+  it('saldo zero não é negativo', () => {
+    expect(
+      alertasDeProdutoNegativo(
+        [{ receitaId: 2, quantidadeDisponivel: 0 }],
+        receitas,
+      ),
+    ).toEqual([]);
+  });
+
+  it('ignora o saldo de receita fora da lista', () => {
+    expect(
+      alertasDeProdutoNegativo(
+        [{ receitaId: 99, quantidadeDisponivel: -10 }],
+        receitas,
+      ),
+    ).toEqual([]);
   });
 });
