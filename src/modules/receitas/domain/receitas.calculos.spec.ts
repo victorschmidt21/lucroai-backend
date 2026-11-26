@@ -9,6 +9,7 @@ import type { GastoParaCusto } from '../../gastos-indiretos/domain/gastos-indire
 import {
   calcularCustoInvisivel,
   calcularCustoItem,
+  calcularCustoParaUsoEmReceita,
   calcularCustoReceita,
   calcularCustoUnitario,
   calcularMargemContribuicao,
@@ -392,6 +393,7 @@ describe('calcularCustoReceita', () => {
           custoCalculado: expect.closeTo(0.255, P),
         },
       ],
+      receitas: [],
       lotes: 1,
       totalUnidades: 50,
       custoIngredientes: expect.closeTo(3.305, P),
@@ -1061,6 +1063,122 @@ describe('validarMudancaDeUnidade (BE-39)', () => {
     );
     expect(erro).toBeInstanceOf(ConflictError);
     expect(erro).toMatchObject({ code: 'RECEITA_EM_USO' });
+  });
+});
+
+describe('receita dentro de receita: custo (BE-40)', () => {
+  // Forno de R$ 500 no mês, capacidade de 100 fornadas: R$ 5 por fornada.
+  const forno: GastoParaCusto[] = [{ valor: 500, tipo: 'MENSAL' }];
+  const brigadeiro = {
+    // R$ 30 de ingredientes por lote.
+    itens: [
+      { insumoId: 1, quantidade: 1, custoUnitario: 20 },
+      { insumoId: 2, quantidade: 0.5, custoUnitario: 20 },
+    ],
+    rendimento: 1000,
+    usoPorLote: 1,
+    perdaPercentual: 0,
+    gastos: forno,
+    capacidadeMensal: 100,
+  };
+
+  it('ingredientes de R$ 30 + forno de R$ 5, rendendo 1000 g, custam R$ 0,035/g', () => {
+    expect(calcularCustoParaUsoEmReceita(brigadeiro)).toBeCloseTo(0.035, 10);
+  });
+
+  it('a perda aumenta o custo de cada grama boa', () => {
+    expect(
+      calcularCustoParaUsoEmReceita({ ...brigadeiro, perdaPercentual: 0.3 }),
+    ).toBeCloseTo(0.035 / 0.7, 10);
+  });
+
+  it('o forno segue o uso por lote da receita usada', () => {
+    expect(
+      calcularCustoParaUsoEmReceita({ ...brigadeiro, usoPorLote: 2 }),
+    ).toBeCloseTo((30 + 10) / 1000, 10);
+  });
+
+  it('a embalagem e os gastos POR_UNIDADE do brigadeiro não entram', () => {
+    expect(
+      calcularCustoParaUsoEmReceita({
+        ...brigadeiro,
+        embalagemPorUnidade: 1.5,
+        gastos: [...forno, { valor: 0.1, tipo: 'POR_UNIDADE' }],
+      }),
+    ).toBeCloseTo(0.035, 10);
+  });
+
+  it('150 g de brigadeiro somam R$ 5,25 aos ingredientes do Brownie Dois Amores', () => {
+    const doisAmores = {
+      itens: [{ insumoId: 9, quantidade: 0.03, custoUnitario: 50 }],
+      rendimento: 1,
+      gastos: [],
+      capacidadeMensal: 100,
+    };
+    const sem = calcularCustoReceita(doisAmores);
+    const com = calcularCustoReceita({
+      ...doisAmores,
+      receitas: [
+        {
+          receitaId: 2,
+          quantidade: 150,
+          custoUnitario: calcularCustoParaUsoEmReceita(brigadeiro),
+        },
+      ],
+    });
+    expect(com.detalhe.ingredientesLote).toBeCloseTo(1.5 + 5.25, 10);
+    expect(
+      com.detalhe.ingredientesLote - sem.detalhe.ingredientesLote,
+    ).toBeCloseTo(5.25, 10);
+    expect(com.receitas).toEqual([
+      {
+        receitaId: 2,
+        quantidade: 150,
+        custoUnitario: expect.closeTo(0.035, 10),
+        custoCalculado: expect.closeTo(5.25, 10),
+      },
+    ]);
+    expect(com.custoUnitario).toBeCloseTo(6.75, 10);
+  });
+
+  it('o custo da receita usada multiplica pelos lotes, como os insumos', () => {
+    const custo = calcularCustoReceita({
+      itens: [],
+      receitas: [{ receitaId: 2, quantidade: 150, custoUnitario: 0.035 }],
+      rendimento: 1,
+      gastos: [],
+      capacidadeMensal: 100,
+      lotes: 3,
+    });
+    expect(custo.receitas[0]?.quantidade).toBe(450);
+    expect(custo.custoIngredientes).toBeCloseTo(15.75, 10);
+    expect(custo.custoProducao).toBeCloseTo(15.75, 10);
+  });
+
+  it('mudar o preço de um insumo do brigadeiro muda o custo do Dois Amores', () => {
+    const doisAmores = (custoDoChocolate: number) =>
+      calcularCustoReceita({
+        itens: [],
+        receitas: [
+          {
+            receitaId: 2,
+            quantidade: 150,
+            custoUnitario: calcularCustoParaUsoEmReceita({
+              ...brigadeiro,
+              itens: [
+                { insumoId: 1, quantidade: 1, custoUnitario: custoDoChocolate },
+                { insumoId: 2, quantidade: 0.5, custoUnitario: 20 },
+              ],
+            }),
+          },
+        ],
+        rendimento: 1,
+        gastos: [],
+        capacidadeMensal: 100,
+      }).custoUnitario;
+    expect(doisAmores(20)).toBeCloseTo(5.25, 10);
+    // Chocolate de R$ 20 para R$ 30: +R$ 10 no lote de 1000 g → +R$ 1,50 em 150 g.
+    expect(doisAmores(30)).toBeCloseTo(6.75, 10);
   });
 });
 

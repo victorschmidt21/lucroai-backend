@@ -34,6 +34,13 @@ export class ItemReceitaReceitaDto {
   quantidade: number;
   /** `unidadeRendimento` da receita usada. @example 'G' */
   unidade: UnidadeMedida;
+  /**
+   * Custo de 1 unidade da receita usada (ingredientes + forno + perda, sem
+   * embalagem nem gastos por unidade; BE-40), com 4 casas. @example 0.035
+   */
+  custoUnitario: number;
+  /** `quantidade × custoUnitario`, com 2 casas. @example 5.25 */
+  custoCalculado: number;
 }
 
 /** Receita que usa esta dentro dela (BE-39). */
@@ -123,7 +130,10 @@ export class ReceitaDto {
    * compatibilidade; omitido sem preço. @example 0.1765
    */
   margemLucro?: number;
-  /** Preço do Balcão (BE-28), com 4 casas; omitido com percentuais ≥ 100%. @example 0.6961 */
+  /**
+   * Preço do Balcão (BE-28), com 4 casas; omitido com percentuais ≥ 100% e
+   * na receita com `vendavel: false` (BE-40). @example 0.6961
+   */
   precoSugerido?: number;
   /** Fornadas ou minutos de forno de 1 lote. @example 1 */
   usoPorLote: number;
@@ -144,7 +154,10 @@ export class ReceitaDto {
   usadaEm: UsadaEmDto[];
   /** Detalhamento do custo de 1 unidade (BE-28). */
   custo: CustoReceitaDetalheDto;
-  /** Preço sugerido por canal ativo, em ordem de criação do canal (BE-28). */
+  /**
+   * Preço sugerido por canal ativo, em ordem de criação do canal (BE-28);
+   * `[]` na receita com `vendavel: false` (BE-40).
+   */
   precos: PrecoCanalDto[];
 }
 
@@ -159,7 +172,14 @@ export type ReceitaComItens = Receita & {
   itens: ItemReceita[];
   /** Receitas usadas dentro desta (BE-39). */
   receitasUsadas: (ItemReceitaReceita & {
-    receitaUsada: { nome: string; unidadeRendimento: UnidadeMedida };
+    receitaUsada: {
+      nome: string;
+      unidadeRendimento: UnidadeMedida;
+      rendimento: number;
+      usoPorLote: number;
+      perdaPercentual: number;
+      itens: { insumoId: number; quantidade: number }[];
+    };
   })[];
   /** Receitas que usam esta (BE-39). */
   usadaEm: { receita: { id: number; nome: string } }[];
@@ -205,11 +225,13 @@ export function toReceitaDto(
         round2,
       ),
     })),
-    receitas: row.receitasUsadas.map((item) => ({
+    receitas: row.receitasUsadas.map((item, i) => ({
       receitaId: item.receitaUsadaId,
       nome: item.receitaUsada.nome,
       quantidade: item.quantidade,
       unidade: item.receitaUsada.unidadeRendimento,
+      custoUnitario: round4(custo.receitas[i]?.custoUnitario ?? 0),
+      custoCalculado: round2(custo.receitas[i]?.custoCalculado ?? 0),
     })),
     usadaEm: row.usadaEm.map(({ receita }) => ({
       receitaId: receita.id,

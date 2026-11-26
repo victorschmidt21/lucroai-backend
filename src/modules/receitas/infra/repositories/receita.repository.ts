@@ -36,7 +36,21 @@ const include = {
   receitasUsadas: {
     orderBy: { id: 'asc' },
     include: {
-      receitaUsada: { select: { nome: true, unidadeRendimento: true } },
+      // O custo da receita usada (BE-40) vem na mesma consulta: o Prisma
+      // busca cada nível de uma vez para todas as receitas, sem N+1.
+      receitaUsada: {
+        select: {
+          nome: true,
+          unidadeRendimento: true,
+          rendimento: true,
+          usoPorLote: true,
+          perdaPercentual: true,
+          itens: {
+            orderBy: { id: 'asc' },
+            select: { insumoId: true, quantidade: true },
+          },
+        },
+      },
     },
   },
   usadaEm: {
@@ -68,20 +82,26 @@ export class ReceitaRepository {
 
   /**
    * Receitas da empresa entre `ids`, com a indicação de se já usam receitas
-   * dentro (BE-39). Ids de outra empresa ficam de fora.
+   * dentro (BE-39) e os insumos delas (BE-40, para o custo). Ids de outra
+   * empresa ficam de fora.
    */
   async findParaUso(
     ids: number[],
     empresaId: number,
-  ): Promise<{ id: number; temReceitas: boolean }[]> {
+  ): Promise<{ id: number; temReceitas: boolean; insumoIds: number[] }[]> {
     if (ids.length === 0) return [];
     const rows = await this.prisma.receita.findMany({
       where: { id: { in: ids }, empresaId },
-      select: { id: true, _count: { select: { receitasUsadas: true } } },
+      select: {
+        id: true,
+        itens: { select: { insumoId: true } },
+        _count: { select: { receitasUsadas: true } },
+      },
     });
     return rows.map((row) => ({
       id: row.id,
       temReceitas: row._count.receitasUsadas > 0,
+      insumoIds: row.itens.map((item) => item.insumoId),
     }));
   }
 
