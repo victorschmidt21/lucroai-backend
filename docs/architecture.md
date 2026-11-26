@@ -51,7 +51,7 @@ Cada tabela pertence a **um** módulo, e só ele lê e escreve nela pelo Prisma.
 
 ### Tabelas e donos
 
-Schema em `prisma/schema.prisma`, migration inicial `init` (BE-05). Toda tabela de negócio raiz tem `empresa_id` com FK para `empresa` e índice; as tabelas de itens (`item_receita`, `rateio_producao`, `item_venda`) herdam a empresa do pai.
+Schema em `prisma/schema.prisma`, migration inicial `init` (BE-05). Toda tabela de negócio raiz tem `empresa_id` com FK para `empresa` e índice; as tabelas de itens (`item_receita`, `item_receita_receita`, `rateio_producao`, `item_venda`) herdam a empresa do pai.
 
 | Tabela (model) | Módulo dono | Chaves estrangeiras (`ON DELETE`) |
 | --- | --- | --- |
@@ -64,6 +64,7 @@ Schema em `prisma/schema.prisma`, migration inicial `init` (BE-05). Toda tabela 
 | `gasto_indireto` (`GastoIndireto`) | `gastos-indiretos` | `empresa_id` |
 | `receita` (`Receita`) | `receitas` | `empresa_id` |
 | `item_receita` (`ItemReceita`) | `receitas` | `receita_id` (`CASCADE`), `insumo_id` (`RESTRICT` → 409 `INSUMO_EM_USO`) |
+| `item_receita_receita` (`ItemReceitaReceita`) | `receitas` | `receita_id` (`CASCADE`), `receita_usada_id` (`RESTRICT` → 409 `RECEITA_EM_USO`, BE-39) |
 | `estoque` (`Estoque`) | `estoque` | `empresa_id`, `insumo_id` (`CASCADE`, único) |
 | `movimentacao_estoque` (`MovimentacaoEstoque`) | `estoque` | `empresa_id`, `insumo_id` (`CASCADE`) |
 | `estoque_produto_acabado` (`EstoqueProdutoAcabado`) | `estoque` | `empresa_id`, `receita_id` (`CASCADE`, único) |
