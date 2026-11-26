@@ -278,7 +278,7 @@ Origem: `recipe-service/src/modules/receitas/application/services/receita.servic
 
 - Tabela `item_receita_receita` (`ItemReceitaReceita`): `receita_id` (a que usa, `CASCADE`), `receita_usada_id` (a usada, `RESTRICT`) e `quantidade` (> 0).
 - A `quantidade` fica **na unidade do rendimento da receita usada** (`unidadeRendimento`): gramas se o brigadeiro rende 1000 G, unidades se o brownie rende 20 UN. Sem conversão entre G e KG.
-- `vendavel` (padrão `true`): `false` marca a receita que só serve para usar dentro de outras. **Muda (BE-40):** a receita com `vendavel: false` continua com custo, mas sem preço: `precoSugerido` (e `margemLucro`) omitidos, `precos: []`, e fica fora do alerta de preço defasado. O efeito nas vendas vem na BE-41.
+- `vendavel` (padrão `true`): `false` marca a receita que só serve para usar dentro de outras. **Muda (BE-40):** a receita com `vendavel: false` continua com custo, mas sem preço: `precoSugerido` (e `margemLucro`) omitidos, `precos: []`, e fica fora do alerta de preço defasado. **Novo (BE-41):** vender a receita com `vendavel: false` → 422 `RECEITA_NAO_VENDIDA_SOZINHA` ([Vendas](#vendas)).
 - Corpo: `receitas: [{ receita_id, quantidade }]` (opcional, padrão `[]`) e `vendavel`. `insumos` passa a ser opcional (padrão `[]`): a receita pode ter só receitas, só insumos ou os dois, mas precisa de ao menos um item (400 `DADOS_INVALIDOS`, campo `insumos`). No `PUT`, `receitas` omitido mantém as salvas e enviado substitui todas.
 - Resposta: `vendavel`, `receitas: [{ receitaId, nome, quantidade, unidade }]` (na ordem informada; `unidade` é a `unidadeRendimento` da usada) e `usadaEm: [{ receitaId, nome }]` (quem usa esta receita, por id).
 - Regras, na ordem em que são conferidas:
@@ -288,7 +288,7 @@ Origem: `recipe-service/src/modules/receitas/application/services/receita.servic
   - **um nível só**: a receita que já é usada em outra não pode ganhar receitas, e a usada não pode ter receitas dentro: 422 `RECEITA_DENTRO_DE_RECEITA_COM_RECEITA`;
   - mudar a `unidadeRendimento` de uma receita usada em outra: 409 `RECEITA_EM_USO` (as quantidades perderiam o sentido);
   - excluir receita usada em outra: 409 `RECEITA_EM_USO`, com os nomes de quem usa na mensagem ("Receita usada em outras receitas não pode ser excluída: Brownie Dois Amores"). O service confere antes de excluir; a FK `RESTRICT` fica de garantia.
-- A produção ainda não dá baixa nas receitas usadas (BE-41).
+- A produção tira as receitas usadas do estoque pronto delas (BE-41, [Produções](#produções)).
 - Funções puras: `validarItensDaReceita` (ao menos um item, repetida, ela mesma, um nível só), `validarExclusaoDaReceita` e `validarMudancaDeUnidade`.
 
 #### Custo com receita dentro de receita
@@ -458,6 +458,24 @@ Exemplo (critério da BE-30): 2 lotes do pão francês (ingredientes de R$ 3,305
 - Função pura `calcularProducao({ rendimento, ingredientesLote, usoPorLote? }, lotes, gastos, capacidadeMensal)` em `producoes/domain/producoes.calculos.ts`, com o `calcularGastoNoCusto` da BE-26. Os rateios saem na ordem dos gastos (com o id omitido, a de `GET /gastos-indiretos`: id decrescente).
 - Uma falha em qualquer passo (ex.: insumo sem registro de estoque → 404) desfaz tudo: produção, rateios, baixas e entrada de produto acabado.
 
+### Produção com receita dentro de receita
+
+**Novo (BE-41).** Produzir uma receita que usa outras ([Receita dentro de receita](#receita-dentro-de-receita)) faz o que a cozinha faz: o Brownie Dois Amores tira brownie e brigadeiro do estoque pronto. Na mesma transação da produção:
+
+```
+para cada receita usada:
+  saida = quantidade por lote × lotes            // na unidade do rendimento da usada; calcularReceitasUsadas
+  saldo pronto da usada = round6(saldo − saida)  // pode ficar negativo
+```
+
+- Dá baixa nos insumos da própria receita, como antes; os insumos das receitas usadas **não** são baixados de novo (saíram quando elas foram produzidas).
+- Grava uma movimentação `SAIDA` / origem `PRODUCAO` por receita usada, com `referenciaId` = id da produção (`EstoqueProdutoAcabadoService.saidaPorProducao`, com a linha travada e o saldo criado zerado se ainda não existir).
+- O saldo pronto da receita usada **pode ficar negativo**, a mesma decisão do estoque de insumos (lacuna 10): sem brigadeiro branco pronto, 2 lotes do Brownie Dois Amores (150 g por lote) deixam o saldo dele em −300 g, e `GET /alertas` o lista em `produtosNegativos`. A **venda continua** exigindo saldo: concluir sem saldo → 422 `ESTOQUE_INSUFICIENTE`.
+- **Custo:** o `ingredientesLote` ao custo médio (BE-30) já inclui as receitas usadas (BE-40). A produção **não rateia de novo o forno** das receitas usadas: o forno delas foi cobrado quando elas foram produzidas, e só o `usoPorLote` da receita produzida gera rateio.
+- O custo das receitas usadas é **calculado na hora** (`custoParaUso`: ingredientes ao custo médio + forno + perda), **não copiado** da produção que as gerou. Se o insumo do brigadeiro mudou de custo médio entre a produção dele e a do Brownie Dois Amores, vale o custo médio atual.
+- A produção guarda o que saiu em `receita_usada_producao` (`ReceitaUsadaProducao`: `receitaId` sem FK, `nome` e `unidade` copiados na hora, `quantidade` = por lote × lotes) e devolve `receitasUsadas: [{ receitaId, nome, quantidade, unidade }]` (`[]` na receita só com insumos).
+- Receita só com insumos: nada muda.
+
 ## Estoque de produto acabado
 
 Origem: `operations-service/src/modules/estoque-produto-acabado/` (`estoque-produto-acabado.service.ts` e `prisma-estoque-produto-acabado.repository.ts`).
@@ -468,7 +486,8 @@ saída por venda:      se saldo < quantidade → erro "Estoque insuficiente..."
                       senão saldo = round6(saldo − quantidade)
 ```
 
-- Um saldo por receita, com movimentações (`ENTRADA` na produção, `SAIDA` na venda).
+- Um saldo por receita, com movimentações (`ENTRADA` na produção, `SAIDA` na venda e, desde a BE-41, `SAIDA/PRODUCAO` quando a receita é usada dentro de outra que foi produzida; essa saída aceita saldo negativo, a da venda não).
+- **Novo (BE-41):** `GET /estoque/produtos` devolve `estoqueNegativo` (saldo < 0) e o `vendavel` da receita. A rota mora no módulo `producoes` (`EstoqueProntoController`), porque o `estoque` não pode depender de `receitas` (ciclo pelo `insumos`).
 - **Muda (BE-12):** a falta de saldo responde 422 `ESTOQUE_INSUFICIENTE` (hoje é 400 dentro do consumidor do evento), com a mesma mensagem de hoje: "Estoque insuficiente para a receita {id}: disponível {saldo}, solicitado {quantidade}", que o frontend detecta. Nova rota `GET /estoque/produtos` (lacuna 6).
 - `EstoqueProdutoAcabadoService` (módulo `estoque`): `entradaPorProducao(receitaId, totalUnidades, producaoId, empresaId, tx)` cria o saldo zerado na primeira produção e `saidaPorVenda(receitaId, quantidade, vendaId, empresaId, tx)` é a baixa da venda (BE-13). Os dois rodam na transação de quem chama, com a linha travada (`FOR UPDATE`), e gravam a movimentação (`ENTRADA/PRODUCAO` ou `SAIDA/VENDA`, `referenciaId` = id da produção ou da venda, quantidade como veio). Receita sem saldo vale 0 na saída.
 - Função pura `calcularSaidaProdutoAcabado(receitaId, disponivel, quantidade)` em `estoque/domain/estoque.calculos.ts`; a entrada usa `calcularSaldoAposMovimentacao`.
@@ -495,6 +514,7 @@ status inicial      = PENDENTE
 **Muda (BE-23):** a venda grava os valores exatos (inclusive o `custoUnitario` exato da receita); a resposta mostra `total` com 2 casas e `custoUnitario`, `margemRealizada` e `lucroReal` com 4.
 
 - Item: `receita_id` inteiro > 0, `quantidade` inteiro > 0, `preco_unitario_real` > 0 com até 2 casas.
+- **Novo (BE-41):** receita com `vendavel: false` (só usada dentro de outras) → 422 `RECEITA_NAO_VENDIDA_SOZINHA` no registro (`validarReceitaVendavel` em `vendas.calculos.ts`).
 - Receita sem `custoUnitario` → `custoUnitario`, `margemRealizada` e `lucroReal` do item ficam `null` (a venda é registrada mesmo assim). Desde a BE-27 o custo é sempre calculado, então isso só acontece com vendas antigas. A margem e o lucro real podem ser negativos (preço abaixo do custo).
 - Transições: só `PENDENTE` muda, para `CONCLUIDA` ou `CANCELADA`. Venda `CONCLUIDA` ou `CANCELADA` → 422 `VENDA_FINALIZADA` "Venda já finalizada não pode ser alterada". **Muda (BE-13):** o status passa de 400 para 422, e `PENDENTE` → `PENDENTE` (hoje aceito sem efeito) dá 422 `TRANSICAO_INVALIDA` "Venda pendente só pode ser concluída ou cancelada".
 - O registro não confere o estoque (lacuna 24, mantida): a barreira é a conclusão.
@@ -506,7 +526,7 @@ status inicial      = PENDENTE
 
 ## Alertas
 
-**Novo (BE-32).** `GET /alertas` junta o que o frontend avisa ao entrar. Só lê; o módulo `alertas` não tem tabela. Funções puras em `alertas/domain/alertas.calculos.ts` (`alertasDeEstoqueNegativo` e `alertasDePrecoDefasado`), com as regras de `estoque` (`estoqueNegativo`) e de `insumos` (`calcularAumentoReposicao` e `precoDefasado`).
+**Novo (BE-32).** `GET /alertas` junta o que o frontend avisa ao entrar. Só lê; o módulo `alertas` não tem tabela. Funções puras em `alertas/domain/alertas.calculos.ts` (`alertasDeEstoqueNegativo`, `alertasDePrecoDefasado` e, desde a BE-41, `alertasDeProdutoNegativo`), com as regras de `estoque` (`estoqueNegativo`) e de `insumos` (`calcularAumentoReposicao` e `precoDefasado`).
 
 ```
 estoqueNegativo:  saldo < 0
@@ -517,6 +537,7 @@ precoDefasado:    round6(aumento) > 0,10                        // mais de 10%
 - **Estoque negativo**: insumos da empresa com saldo < 0, por nome, com `id`, `nome`, `saldo` e `unidade`. O estoque negativo continua permitido; o alerta só avisa.
 - **Preço defasado**: insumos cuja reposição (`precoMercado ?? ultimoCusto`, [Compras de insumo](#compras-de-insumo)) subiu **mais** de 10% sobre o custo médio, por nome. O estoque foi comprado mais barato do que custa repor: o preço sugerido, que já usa a reposição, subiu, e quem vende pelo preço antigo perde margem. 10% exatos não contam; o aumento é comparado com 6 casas para o erro de ponto flutuante não fazer 10% virar "mais de 10%". Custo médio ≤ 0 não tem base e nunca está defasado. Uma reposição abaixo do médio também não é alerta.
 - Cada insumo defasado traz as receitas que o usam (vazia se nenhuma), com o preço no **Balcão** (`ReceitaService.listarPrecosSugeridos`): `precoSugerido`, o novo, com o custo de reposição (o mesmo de `GET /receitas/:id`), e `precoComCustoMedio`, o mesmo preço com o custo médio dos insumos, para a pessoa ver quanto o preço subiu. Os preços só são calculados quando há insumo defasado. **Muda (BE-40):** uma receita também usa os insumos das receitas usadas dentro dela; as receitas com `vendavel: false` não têm preço e ficam de fora.
+- **Produtos negativos (novo, BE-41)**: receitas com o estoque pronto < 0, por nome, com `receitaId`, `nome`, `saldo` (6 casas) e `unidade` (a `unidadeRendimento` da receita), para o aviso "registre a produção do Brigadeiro branco". Acontece quando a receita é usada dentro de outra sem a produção dela ter sido registrada. Os nomes só são buscados quando há saldo negativo.
 - Arredondamento só na resposta: custos com 6 casas, `aumentoPercentual` (fração) e preços com 4.
 
 ## Lacunas do backend atual
