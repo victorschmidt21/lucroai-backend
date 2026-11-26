@@ -5,6 +5,7 @@ import type { App } from 'supertest/types.js';
 import { z } from 'zod';
 import { AppModule } from '../src/app.module.js';
 import { setupApp } from '../src/app.setup.js';
+import { PrismaService } from '../src/shared/infra/database/prisma.service.js';
 import { jwtPayloadSchema, loginResponseSchema } from './contrato/auth.js';
 import { gastoIndiretoSchema, insumoSchema } from './contrato/catalog.js';
 import {
@@ -123,6 +124,24 @@ const receitaComReceitasSchema = receitaNovaSchema.extend({
   usadaEm: z.array(z.object({ receitaId: z.number().int(), nome: z.string() })),
 });
 
+/** Receitas usadas que saíram do estoque pronto na produção (BE-41). */
+const producaoNovaSchema = producaoSchema.extend({
+  receitasUsadas: z.array(
+    z.object({
+      receitaId: z.number().int(),
+      nome: z.string(),
+      quantidade: z.number(),
+      unidade: z.string(),
+    }),
+  ),
+});
+
+/** Estoque pronto negativo e `vendavel` da receita (BE-41). */
+const estoqueProntoSchema = estoqueProdutoSchema.extend({
+  estoqueNegativo: z.boolean(),
+  vendavel: z.boolean(),
+});
+
 /** Canal e lucro real da venda (BE-30), ao lado da `margemRealizada` legada. */
 const vendaNovaSchema = vendaSchema.extend({
   canalId: z.number().int().nullable(),
@@ -225,6 +244,15 @@ const alertasSchema = z.object({
           precoComCustoMedio: z.number().nullable(),
         }),
       ),
+    }),
+  ),
+  // Receitas com estoque pronto negativo (BE-41).
+  produtosNegativos: z.array(
+    z.object({
+      receitaId: z.number().int(),
+      nome: z.string(),
+      saldo: z.number(),
+      unidade: z.string(),
     }),
   ),
 });
@@ -693,6 +721,10 @@ describe('Contrato com o frontend (e2e)', () => {
       const producao = validar(producaoSchema, criada.body);
       producaoId = producao.id;
       expect(producao.rateios).toHaveLength(1);
+      // Receita só com insumos: nada sai do estoque pronto (BE-41).
+      expect(validar(producaoNovaSchema, criada.body).receitasUsadas).toEqual(
+        [],
+      );
       expect(producao.custoTotal).not.toBeNull();
 
       const lista = await comA(
@@ -717,6 +749,9 @@ describe('Contrato com o frontend (e2e)', () => {
       const produtos = await comA('get', '/estoque/produtos').expect(200);
       expect(validar(z.array(estoqueProdutoSchema), produtos.body)).toEqual([
         expect.objectContaining({ receitaId, quantidadeDisponivel: 20 }),
+      ]);
+      expect(validar(z.array(estoqueProntoSchema), produtos.body)).toEqual([
+        expect.objectContaining({ estoqueNegativo: false, vendavel: true }),
       ]);
     });
   });
@@ -988,6 +1023,7 @@ describe('Contrato com o frontend (e2e)', () => {
       expect(validar(alertasSchema, vazio.body)).toEqual({
         estoqueNegativo: [],
         precoDefasado: [],
+        produtosNegativos: [],
       });
 
       // Farinha a R$ 4/kg com 1 kg; o pão usa 2 kg por lote.
@@ -1308,6 +1344,187 @@ describe('Contrato com o frontend (e2e)', () => {
       expect(editado.body.receitas).toHaveLength(3);
       await comA('delete', `/receitas/${doisAmores.id}`).expect(204);
       await comA('delete', `/receitas/${branco.id}`).expect(204);
+    });
+    it('a produção do Brownie Dois Amores tira as receitas usadas do estoque pronto (BE-41)', async () => {
+      const criar = (corpo: object) =>
+        comA('post', '/receitas').send(corpo).expect(201);
+      const brigadeiro = async (nome: string) =>
+        validar(
+          receitaComReceitasSchema,
+          (
+            await criar({
+              nome,
+              rendimento: 1000,
+              unidadeRendimento: 'G',
+              vendavel: false,
+              insumos: [{ insumo_id: acucarId, quantidade: 0.4 }],
+            })
+          ).body,
+        ).id;
+      const preto = await brigadeiro('Brigadeiro preto 2');
+      const branco = await brigadeiro('Brigadeiro branco 2');
+      const brownie = validar(
+        receitaComReceitasSchema,
+        (
+          await criar({
+            nome: 'Brownie 2',
+            rendimento: 20,
+            unidadeRendimento: 'UN',
+            insumos: [{ insumo_id: farinhaId, quantidade: 0.3 }],
+          })
+        ).body,
+      ).id;
+      const doisAmores = validar(
+        receitaComReceitasSchema,
+        (
+          await criar({
+            nome: 'Brownie Dois Amores 2',
+            rendimento: 1,
+            unidadeRendimento: 'UN',
+            insumos: [{ insumo_id: acucarId, quantidade: 0.03 }],
+            receitas: [
+              { receita_id: brownie, quantidade: 1 },
+              { receita_id: preto, quantidade: 150 },
+              { receita_id: branco, quantidade: 150 },
+            ],
+          })
+        ).body,
+      );
+
+      // 1000 g de brigadeiro preto pronto; nada de branco nem de brownie.
+      await comA('post', '/producoes')
+        .send({ receita_id: preto, quantidade: 1, gasto_indireto_ids: [] })
+        .expect(201);
+
+      const criada = await comA('post', '/producoes')
+        .send({
+          receita_id: doisAmores.id,
+          quantidade: 2,
+          gasto_indireto_ids: [],
+        })
+        .expect(201);
+      const producao = validar(producaoNovaSchema, criada.body);
+      expect(producao.receitasUsadas).toEqual([
+        { receitaId: brownie, nome: 'Brownie 2', quantidade: 2, unidade: 'UN' },
+        {
+          receitaId: preto,
+          nome: 'Brigadeiro preto 2',
+          quantidade: 300,
+          unidade: 'G',
+        },
+        {
+          receitaId: branco,
+          nome: 'Brigadeiro branco 2',
+          quantidade: 300,
+          unidade: 'G',
+        },
+      ]);
+      // Sem gastos escolhidos, nada é rateado: o custo é só o dos
+      // ingredientes do lote ao custo médio, que já traz as receitas usadas
+      // (BE-40). A receita mostra a reposição, por isso só "perto".
+      expect(producao.rateios).toEqual([]);
+      expect(producao.custoTotal).toBeCloseTo(
+        doisAmores.custo.ingredientesLote * 2,
+        1,
+      );
+      expect(producao.custoUnitario).toBeCloseTo(
+        (producao.custoTotal ?? 0) / 2,
+        2,
+      );
+      const lida = await comA('get', `/producoes/${producao.id}`).expect(200);
+      expect(validar(producaoNovaSchema, lida.body).receitasUsadas).toEqual(
+        producao.receitasUsadas,
+      );
+
+      const res = await comA('get', '/estoque/produtos').expect(200);
+      const saldos = validar(z.array(estoqueProntoSchema), res.body);
+      const saldo = (id: number) => saldos.find((e) => e.receitaId === id);
+      expect(saldo(preto)).toMatchObject({
+        quantidadeDisponivel: 700,
+        estoqueNegativo: false,
+        vendavel: false,
+      });
+      expect(saldo(branco)).toMatchObject({
+        quantidadeDisponivel: -300,
+        estoqueNegativo: true,
+        vendavel: false,
+      });
+      expect(saldo(brownie)).toMatchObject({
+        quantidadeDisponivel: -2,
+        estoqueNegativo: true,
+        vendavel: true,
+      });
+      expect(saldo(doisAmores.id)).toMatchObject({
+        quantidadeDisponivel: 2,
+        vendavel: true,
+      });
+
+      // Uma saída SAIDA/PRODUCAO por receita usada, com o id da produção.
+      // Não há rota com as movimentações do estoque pronto: lê do banco.
+      const movimentacoes = await app
+        .get(PrismaService)
+        .movimentacaoProdutoAcabado.findMany({
+          where: { referenciaId: producao.id, origem: 'PRODUCAO' },
+          orderBy: { id: 'asc' },
+        });
+      expect(
+        movimentacoes.map((m) => ({
+          receitaId: m.receitaId,
+          tipo: m.tipo,
+          quantidade: m.quantidade,
+        })),
+      ).toEqual([
+        { receitaId: brownie, tipo: 'SAIDA', quantidade: 2 },
+        { receitaId: preto, tipo: 'SAIDA', quantidade: 300 },
+        { receitaId: branco, tipo: 'SAIDA', quantidade: 300 },
+        { receitaId: doisAmores.id, tipo: 'ENTRADA', quantidade: 2 },
+      ]);
+
+      const alertas = validar(
+        alertasSchema,
+        (await comA('get', '/alertas').expect(200)).body,
+      );
+      expect(alertas.produtosNegativos).toEqual([
+        {
+          receitaId: branco,
+          nome: 'Brigadeiro branco 2',
+          saldo: -300,
+          unidade: 'G',
+        },
+        { receitaId: brownie, nome: 'Brownie 2', saldo: -2, unidade: 'UN' },
+      ]);
+      // A empresa B não vê os produtos negativos da A.
+      const daB = await comB('get', '/alertas').expect(200);
+      expect(validar(alertasSchema, daB.body).produtosNegativos).toEqual([]);
+
+      // Receita que não é vendida sozinha → 422; a conclusão da venda continua
+      // barrando o estoque pronto insuficiente.
+      const naoVendida = await comA('post', '/vendas')
+        .send({
+          itens: [
+            { receita_id: branco, quantidade: 1, preco_unitario_real: 5 },
+          ],
+        })
+        .expect(422);
+      expect(validar(erroSchema, naoVendida.body).code).toBe(
+        'RECEITA_NAO_VENDIDA_SOZINHA',
+      );
+      const semSaldo = await comA('post', '/vendas')
+        .send({
+          itens: [
+            { receita_id: brownie, quantidade: 1, preco_unitario_real: 5 },
+          ],
+        })
+        .expect(201);
+      const recusada = await comA(
+        'patch',
+        `/vendas/${validar(vendaSchema, semSaldo.body).id}/status`,
+      )
+        .send({ status: 'CONCLUIDA' })
+        .expect(422);
+      expect(validar(erroSchema, recusada.body).code).toBe(
+        'ESTOQUE_INSUFICIENTE',
+      );
     });
   });
 
