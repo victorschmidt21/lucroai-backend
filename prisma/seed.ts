@@ -452,6 +452,8 @@ async function limparEmpresa(tx: Tx, empresaId: number): Promise<void> {
   await tx.movimentacaoProdutoAcabado.deleteMany({ where: { empresaId } });
   await tx.estoqueProdutoAcabado.deleteMany({ where: { empresaId } });
   await tx.producao.deleteMany({ where: { empresaId } }); // rateios em CASCADE
+  // As receitas usadas dentro de outras são RESTRICT (BE-39): saem antes.
+  await tx.itemReceitaReceita.deleteMany({ where: { receita: { empresaId } } });
   await tx.receita.deleteMany({ where: { empresaId } }); // itens em CASCADE
   await tx.movimentacaoEstoque.deleteMany({ where: { empresaId } });
   await tx.estoque.deleteMany({ where: { empresaId } });
