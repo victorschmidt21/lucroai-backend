@@ -121,6 +121,6 @@ Depois do corte, o [`GrupoDoisENG/lucroai-backend`](https://github.com/GrupoDois
 Texto pronto para colar no topo do `README.md` do `GrupoDoisENG/lucroai-backend`:
 
 ```markdown
-> **Este repositório foi substituído.** O backend do LucroAI agora é um monolito modular (um app NestJS e um Postgres), com o mesmo contrato de API, em [victorschmidt21/lucroai-backend](https://github.com/victorschmidt21/lucroai-backend).
+> **Este repositório foi substituído.** O backend do Doce Fatia (antes LucroAI) agora é um monolito modular (um app NestJS e um Postgres), com o mesmo contrato de API, em [victorschmidt21/lucroai-backend](https://github.com/victorschmidt21/lucroai-backend).
 > Os 5 microsserviços (auth, catalog, recipe, operations e sales) e o RabbitMQ daqui não recebem mais mudanças nem estão em produção. O código fica só como referência das regras originais.
 ```

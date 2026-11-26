@@ -1,6 +1,6 @@
 # Regras de negócio
 
-Fórmulas, arredondamentos e regras do LucroAI. Foram conferidos no código dos microsserviços ([`GrupoDoisENG/lucroai-backend`](https://github.com/GrupoDoisENG/lucroai-backend)), e cada seção cita o arquivo de origem. Os caminhos começam em `services/` daquele repositório. Quando o `OVERVIEW.md` de lá diverge do código, vale o código.
+Fórmulas, arredondamentos e regras do Doce Fatia. Foram conferidos no código dos microsserviços ([`GrupoDoisENG/lucroai-backend`](https://github.com/GrupoDoisENG/lucroai-backend)), e cada seção cita o arquivo de origem. Os caminhos começam em `services/` daquele repositório. Quando o `OVERVIEW.md` de lá diverge do código, vale o código.
 
 **Os números do monolito precisam ser iguais aos dos microsserviços**, exceto onde esta página diz "muda" e cita a issue que corrige uma lacuna. O frontend mostra esses números e repete alguns cálculos nas prévias.
 
