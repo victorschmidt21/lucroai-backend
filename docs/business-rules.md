@@ -278,7 +278,7 @@ Origem: `recipe-service/src/modules/receitas/application/services/receita.servic
 
 - Tabela `item_receita_receita` (`ItemReceitaReceita`): `receita_id` (a que usa, `CASCADE`), `receita_usada_id` (a usada, `RESTRICT`) e `quantidade` (> 0).
 - A `quantidade` fica **na unidade do rendimento da receita usada** (`unidadeRendimento`): gramas se o brigadeiro rende 1000 G, unidades se o brownie rende 20 UN. Sem conversão entre G e KG.
-- `vendavel` (padrão `true`): `false` marca a receita que só serve para usar dentro de outras. Nesta issue ele só é gravado e devolvido; o efeito no preço e nas vendas vem na BE-40 e na BE-41.
+- `vendavel` (padrão `true`): `false` marca a receita que só serve para usar dentro de outras. **Muda (BE-40):** a receita com `vendavel: false` continua com custo, mas sem preço: `precoSugerido` (e `margemLucro`) omitidos, `precos: []`, e fica fora do alerta de preço defasado. O efeito nas vendas vem na BE-41.
 - Corpo: `receitas: [{ receita_id, quantidade }]` (opcional, padrão `[]`) e `vendavel`. `insumos` passa a ser opcional (padrão `[]`): a receita pode ter só receitas, só insumos ou os dois, mas precisa de ao menos um item (400 `DADOS_INVALIDOS`, campo `insumos`). No `PUT`, `receitas` omitido mantém as salvas e enviado substitui todas.
 - Resposta: `vendavel`, `receitas: [{ receitaId, nome, quantidade, unidade }]` (na ordem informada; `unidade` é a `unidadeRendimento` da usada) e `usadaEm: [{ receitaId, nome }]` (quem usa esta receita, por id).
 - Regras, na ordem em que são conferidas:
@@ -288,8 +288,28 @@ Origem: `recipe-service/src/modules/receitas/application/services/receita.servic
   - **um nível só**: a receita que já é usada em outra não pode ganhar receitas, e a usada não pode ter receitas dentro: 422 `RECEITA_DENTRO_DE_RECEITA_COM_RECEITA`;
   - mudar a `unidadeRendimento` de uma receita usada em outra: 409 `RECEITA_EM_USO` (as quantidades perderiam o sentido);
   - excluir receita usada em outra: 409 `RECEITA_EM_USO`, com os nomes de quem usa na mensagem ("Receita usada em outras receitas não pode ser excluída: Brownie Dois Amores"). O service confere antes de excluir; a FK `RESTRICT` fica de garantia.
-- O custo e o preço ainda **não** somam as receitas usadas (BE-40), e a produção ainda não dá baixa nelas (BE-41).
+- A produção ainda não dá baixa nas receitas usadas (BE-41).
 - Funções puras: `validarItensDaReceita` (ao menos um item, repetida, ela mesma, um nível só), `validarExclusaoDaReceita` e `validarMudancaDeUnidade`.
+
+#### Custo com receita dentro de receita
+
+**Novo (BE-40).** O custo de 1 unidade (grama, ml ou unidade do rendimento) da receita usada é só ingredientes, forno e perda:
+
+```text
+custoParaUso = (ingredientesLote + gastosMensaisLote) ÷ rendimento ÷ (1 − perdaPercentual)
+```
+
+- **Sem** embalagem e **sem** gastos `POR_UNIDADE` da receita usada: esses entram uma vez só, no produto final.
+- `gastosMensaisLote` é o da receita usada (o `usoPorLote` dela, `somarGastosMensaisLote`).
+- Na receita que usa: `ingredientesLote = Σ quantidade × custo do insumo + Σ quantidade × custoParaUso`. O resto da conta (forno, embalagem e perda da própria receita, preço por canal, composição, simulação e ponto de equilíbrio) não muda de fórmula.
+- Mesma regra dos insumos (BE-29/BE-30): o **preço** usa o custo de reposição dos insumos da receita usada; produção e venda (`buscarDaEmpresa`), o custo médio.
+- O custo é calculado na leitura: mudar o preço de um insumo do brigadeiro muda o custo do Brownie Dois Amores na próxima leitura.
+- Resposta: cada item de `receitas[]` ganha `custoUnitario` (`custoParaUso`, 4 casas) e `custoCalculado` (`quantidade × custoUnitario`, 2 casas), como o `custoCalculado` dos insumos.
+- Alerta de preço defasado: os `insumoIds` da receita incluem os das receitas usadas (o chocolate do brigadeiro que sobe avisa o Brownie Dois Amores).
+- Sem N+1: a leitura (e a listagem) traz as receitas usadas e os itens delas na mesma consulta, e o contexto de custo busca de uma vez os insumos da receita e os das usadas.
+- Funções puras: `calcularCustoParaUsoEmReceita` e o campo `receitas` de `calcularCustoReceita` (sem arredondar, BE-23).
+
+Exemplo: o brigadeiro tem R$ 30,00 de ingredientes e R$ 5,00 de forno por lote (R$ 500 de gastos mensais, capacidade de 100 fornadas, 1 fornada), rende 1000 g e não tem perda: `(30 + 5) ÷ 1000 ÷ 1 = R$ 0,035/g`. A embalagem dele não entra. Os 150 g dentro do Brownie Dois Amores somam `150 × 0,035 = R$ 5,25` aos ingredientes do lote do Dois Amores. Se o chocolate do brigadeiro subir R$ 10,00 por lote, o grama vai a R$ 0,045 e os 150 g a R$ 6,75.
 
 ### Custo para N lotes
 
@@ -496,7 +516,7 @@ precoDefasado:    round6(aumento) > 0,10                        // mais de 10%
 
 - **Estoque negativo**: insumos da empresa com saldo < 0, por nome, com `id`, `nome`, `saldo` e `unidade`. O estoque negativo continua permitido; o alerta só avisa.
 - **Preço defasado**: insumos cuja reposição (`precoMercado ?? ultimoCusto`, [Compras de insumo](#compras-de-insumo)) subiu **mais** de 10% sobre o custo médio, por nome. O estoque foi comprado mais barato do que custa repor: o preço sugerido, que já usa a reposição, subiu, e quem vende pelo preço antigo perde margem. 10% exatos não contam; o aumento é comparado com 6 casas para o erro de ponto flutuante não fazer 10% virar "mais de 10%". Custo médio ≤ 0 não tem base e nunca está defasado. Uma reposição abaixo do médio também não é alerta.
-- Cada insumo defasado traz as receitas que o usam (vazia se nenhuma), com o preço no **Balcão** (`ReceitaService.listarPrecosSugeridos`): `precoSugerido`, o novo, com o custo de reposição (o mesmo de `GET /receitas/:id`), e `precoComCustoMedio`, o mesmo preço com o custo médio dos insumos, para a pessoa ver quanto o preço subiu. Os preços só são calculados quando há insumo defasado.
+- Cada insumo defasado traz as receitas que o usam (vazia se nenhuma), com o preço no **Balcão** (`ReceitaService.listarPrecosSugeridos`): `precoSugerido`, o novo, com o custo de reposição (o mesmo de `GET /receitas/:id`), e `precoComCustoMedio`, o mesmo preço com o custo médio dos insumos, para a pessoa ver quanto o preço subiu. Os preços só são calculados quando há insumo defasado. **Muda (BE-40):** uma receita também usa os insumos das receitas usadas dentro dela; as receitas com `vendavel: false` não têm preço e ficam de fora.
 - Arredondamento só na resposta: custos com 6 casas, `aumentoPercentual` (fração) e preços com 4.
 
 ## Lacunas do backend atual
