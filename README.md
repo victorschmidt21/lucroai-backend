@@ -1,6 +1,8 @@
-# LucroAI Backend
+# Doce Fatia: backend
 
-Backend do LucroAI: custos, preço sugerido, estoque, produções e vendas para pequenos produtores de alimentos.
+Backend do Doce Fatia: custos, preço sugerido, estoque, produções e vendas para quem produz doces e salgados.
+
+O produto se chamava LucroAI; o repositório e o pacote mantêm o nome `lucroai`.
 
 > **Este repositório substitui o [`GrupoDoisENG/lucroai-backend`](https://github.com/GrupoDoisENG/lucroai-backend)**, que tinha 5 microsserviços com RabbitMQ. Não há mais `auth`, `catalog`, `recipe`, `operations` e `sales` separados: tudo roda aqui.
 

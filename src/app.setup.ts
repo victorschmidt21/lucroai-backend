@@ -21,8 +21,10 @@ export function setupApp(app: INestApplication): void {
   app.enableShutdownHooks();
 
   const config = new DocumentBuilder()
-    .setTitle('LucroAI API')
-    .setDescription('API do backend do LucroAI')
+    .setTitle('Doce Fatia API')
+    .setDescription(
+      'API do Doce Fatia: custos, preço sugerido, estoque, produções e vendas para quem produz doces e salgados.',
+    )
     .setVersion('0.0.1')
     .addBearerAuth()
     .build();

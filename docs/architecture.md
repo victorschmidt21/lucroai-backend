@@ -1,10 +1,10 @@
 # Arquitetura
 
-O backend do LucroAI é um **monolito modular**: uma aplicação NestJS, um processo e um banco Postgres. Ele substitui os 5 microsserviços com RabbitMQ do [`GrupoDoisENG/lucroai-backend`](https://github.com/GrupoDoisENG/lucroai-backend). O código fica dividido em **módulos de domínio** em `src/modules/<modulo>/`, que conversam só pelos services que exportam, dentro do mesmo processo e, quando preciso, da mesma transação.
+O backend do Doce Fatia é um **monolito modular**: uma aplicação NestJS, um processo e um banco Postgres. Ele substitui os 5 microsserviços com RabbitMQ do [`GrupoDoisENG/lucroai-backend`](https://github.com/GrupoDoisENG/lucroai-backend). O código fica dividido em **módulos de domínio** em `src/modules/<modulo>/`, que conversam só pelos services que exportam, dentro do mesmo processo e, quando preciso, da mesma transação.
 
-O padrão vem da Urbizzi, **simplificado** porque o LucroAI é quase todo CRUD com cálculos:
+O padrão vem da Urbizzi, **simplificado** porque o Doce Fatia é quase todo CRUD com cálculos:
 
-| Urbizzi | LucroAI | Por quê |
+| Urbizzi | Doce Fatia | Por quê |
 | --- | --- | --- |
 | Entidade de classe para toda tabela | **Funções puras** em `domain/<modulo>.calculos.ts`; entidade de classe só na `Venda` (status com transições) | A regra está nas fórmulas |
 | Interface de repositório + token `Symbol` + implementação Prisma | **Repositório concreto** (`infra/repositories/<entidade>.repository.ts`), injetado pela classe | Só existe uma implementação, e os testes cobrem funções puras |
