@@ -20,7 +20,10 @@ import {
 export class EstoqueProdutoAcabadoService {
   constructor(private readonly repository: EstoqueProdutoAcabadoRepository) {}
 
-  /** Novo (BE-12, lacuna 6): só as receitas que já tiveram movimentação. */
+  /**
+   * Novo (BE-12, lacuna 6): só as receitas que já tiveram movimentação. Para
+   * o `GET /estoque/produtos` e os alertas, que moram em outros módulos (BE-41).
+   */
   async list(empresaId: number): Promise<EstoqueProdutoDto[]> {
     const rows = await this.repository.listByEmpresa(empresaId);
     return rows.map(toEstoqueProdutoDto);
@@ -62,6 +65,50 @@ export class EstoqueProdutoAcabadoService {
         tipo: 'ENTRADA',
         origem: 'PRODUCAO',
         quantidade: totalUnidades,
+        referenciaId: producaoId,
+      },
+      tx,
+    );
+    return toEstoqueProdutoDto(atualizado);
+  }
+
+  /**
+   * Para o módulo producoes (BE-41), na transação da produção: tira do saldo
+   * da receita usada dentro da produzida a `quantidade` gasta
+   * (`SAIDA/PRODUCAO`, `referenciaId` = id da produção). Ao contrário da
+   * venda, o saldo pode ficar negativo, como o dos insumos (lacuna 10): o
+   * alerta avisa para registrar a produção que faltou. A receita usada já foi
+   * conferida contra a empresa por quem chama.
+   */
+  async saidaPorProducao(
+    receitaId: number,
+    quantidade: number,
+    producaoId: number,
+    empresaId: number,
+    tx: PrismaTransaction,
+  ): Promise<EstoqueProdutoDto> {
+    const estoque = await this.repository.findOrCreateForUpdate(
+      receitaId,
+      empresaId,
+      tx,
+    );
+    if (!estoque) throw receitaNaoEncontrada();
+    const atualizado = await this.repository.updateQuantidadeDisponivel(
+      estoque.id,
+      calcularSaldoAposMovimentacao(
+        estoque.quantidadeDisponivel,
+        'SAIDA',
+        quantidade,
+      ),
+      tx,
+    );
+    await this.repository.createMovimentacao(
+      {
+        empresaId,
+        receitaId,
+        tipo: 'SAIDA',
+        origem: 'PRODUCAO',
+        quantidade,
         referenciaId: producaoId,
       },
       tx,

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { UnidadeMedida } from '../../../../generated/prisma/client.js';
 import { NotFoundError } from '../../../../shared/domain/errors/domain.error.js';
 import type { PrismaTransaction } from '../../../../shared/infra/database/prisma.transaction.js';
 import { CanalVendaService } from '../../../canais/application/services/canal-venda.service.js';
@@ -8,6 +9,7 @@ import { InsumoService } from '../../../insumos/application/services/insumo.serv
 import { calcularCustoReposicao } from '../../../insumos/domain/insumos.calculos.js';
 import {
   type BasePreco,
+  calcularCustoParaUsoEmReceita,
   calcularCustoReceita,
   calcularPercentuaisSemLucro,
   calcularPrecoNoCanal,
@@ -19,9 +21,15 @@ import {
   simularCenario,
   somarGastosMensais,
   somarGastosPercentuais,
+  validarExclusaoDaReceita,
   validarFichaTecnica,
+  validarItensDaReceita,
+  validarMudancaDeUnidade,
 } from '../../domain/receitas.calculos.js';
-import { ReceitaRepository } from '../../infra/repositories/receita.repository.js';
+import {
+  type ItemReceitaData,
+  ReceitaRepository,
+} from '../../infra/repositories/receita.repository.js';
 import type { CreateReceitaDto } from '../dto/create-receita.dto.js';
 import {
   type PrecoVendaBodyDto,
@@ -84,11 +92,27 @@ export interface PrecoSugeridoReceita {
   precoComCustoMedio: number | null;
 }
 
+/**
+ * Nome, unidade e `vendavel` de uma receita (BE-41), para o estoque pronto e
+ * o alerta de produto negativo.
+ */
+export interface ResumoReceita {
+  id: number;
+  nome: string;
+  unidadeRendimento: UnidadeMedida;
+  vendavel: boolean;
+}
+
 /** O Balcão, cuja taxa é a da maquininha: base do `precoSugerido` (BE-28). */
 const BALCAO = { balcao: true, comissaoPercentual: 0 };
 
 interface ItemEntrada {
   insumo_id: number;
+  quantidade: number;
+}
+
+interface ReceitaEntrada {
+  receita_id: number;
   quantidade: number;
 }
 
@@ -105,10 +129,7 @@ export class ReceitaService {
   /** Da mais nova para a mais antiga (`dataCriacao`), com o custo atual. */
   async list(empresaId: number): Promise<ReceitaDto[]> {
     const rows = await this.repository.listByEmpresa(empresaId);
-    const contexto = await this.contexto(
-      rows.flatMap((row) => row.itens.map((item) => item.insumoId)),
-      empresaId,
-    );
+    const contexto = await this.contexto(rows.flatMap(insumoIdsDe), empresaId);
     return rows.map((row) => this.toDto(row, contexto));
   }
 
@@ -117,13 +138,26 @@ export class ReceitaService {
     return this.toDto(row, await this.contextoDe(row, empresaId));
   }
 
-  /** Campos da ficha técnica omitidos assumem os padrões (BE-27). */
+  /**
+   * Campos da ficha técnica omitidos assumem os padrões (BE-27); `insumos` e
+   * `receitas` omitidos são `[]`, e `vendavel` omitido é `true` (BE-39).
+   */
   async create(dto: CreateReceitaDto, empresaId: number): Promise<ReceitaDto> {
     const ficha = resolverFichaTecnica(this.fichaInformada(dto));
     validarFichaTecnica(ficha);
-    // Antes de gravar: 404 se algum insumo não for da empresa.
+    const insumos = (dto.insumos ?? []).map(toItemData);
+    const receitas = (dto.receitas ?? []).map(toItemReceitaData);
+    const insumosDasUsadas = await this.validarItens(
+      null,
+      insumos.length,
+      receitas,
+      false,
+      empresaId,
+    );
+    // Antes de gravar: 404 se algum insumo não for da empresa. Os insumos das
+    // receitas usadas entram no custo (BE-40).
     const contexto = await this.contexto(
-      dto.insumos.map((item) => item.insumo_id),
+      [...insumos.map((item) => item.insumoId), ...insumosDasUsadas],
       empresaId,
     );
     const row = await this.repository.create(
@@ -132,9 +166,11 @@ export class ReceitaService {
         nome: dto.nome,
         rendimento: dto.rendimento,
         unidadeRendimento: dto.unidadeRendimento,
+        vendavel: dto.vendavel ?? true,
         ...ficha,
       },
-      dto.insumos.map(toItemData),
+      insumos,
+      receitas,
     );
     return this.toDto(row, contexto);
   }
@@ -158,8 +194,27 @@ export class ReceitaService {
         insumoId: item.insumoId,
         quantidade: item.quantidade,
       }));
+    const receitas =
+      dto.receitas?.map(toItemReceitaData) ??
+      atual.receitasUsadas.map((item) => ({
+        receitaUsadaId: item.receitaUsadaId,
+        quantidade: item.quantidade,
+      }));
+    const usadaEm = atual.usadaEm.map(({ receita }) => receita.nome);
+    validarMudancaDeUnidade(
+      atual.unidadeRendimento,
+      dto.unidadeRendimento ?? undefined,
+      usadaEm,
+    );
+    const insumosDasUsadas = await this.validarItens(
+      id,
+      insumos.length,
+      receitas,
+      usadaEm.length > 0,
+      empresaId,
+    );
     const contexto = await this.contexto(
-      insumos.map((item) => item.insumoId),
+      [...insumos.map((item) => item.insumoId), ...insumosDasUsadas],
       empresaId,
     );
     const row = await this.repository.update(
@@ -168,15 +223,19 @@ export class ReceitaService {
         nome: dto.nome ?? undefined,
         rendimento: dto.rendimento ?? undefined,
         unidadeRendimento: dto.unidadeRendimento ?? undefined,
+        vendavel: dto.vendavel ?? undefined,
         ...ficha,
       },
       dto.insumos ? insumos : undefined,
+      dto.receitas ? receitas : undefined,
     );
     return this.toDto(row, contexto);
   }
 
+  /** Receita usada dentro de outra → 409 `RECEITA_EM_USO` com os nomes (BE-39). */
   async delete(id: number, empresaId: number): Promise<void> {
-    await this.getOrFail(id, empresaId);
+    const atual = await this.getOrFail(id, empresaId);
+    validarExclusaoDaReceita(atual.usadaEm.map(({ receita }) => receita.nome));
     await this.repository.delete(id);
   }
 
@@ -258,18 +317,31 @@ export class ReceitaService {
     };
   }
 
+  /** Para o estoque pronto e os alertas (BE-41): sem calcular custo. */
+  async listarResumos(empresaId: number): Promise<ResumoReceita[]> {
+    const rows = await this.repository.listByEmpresa(empresaId);
+    return rows.map((row) => ({
+      id: row.id,
+      nome: row.nome,
+      unidadeRendimento: row.unidadeRendimento,
+      vendavel: row.vendavel,
+    }));
+  }
+
   /**
    * Para o módulo alertas (BE-32): o preço sugerido (Balcão) de cada receita
-   * da empresa com o custo de reposição e com o custo médio dos insumos.
+   * vendável da empresa com o custo de reposição e com o custo médio dos
+   * insumos. Os `insumoIds` incluem os das receitas usadas dentro (BE-40):
+   * o chocolate do brigadeiro que sobe avisa o Brownie Dois Amores. A receita
+   * com `vendavel: false` não tem preço e fica de fora.
    */
   async listarPrecosSugeridos(
     empresaId: number,
   ): Promise<PrecoSugeridoReceita[]> {
-    const rows = await this.repository.listByEmpresa(empresaId);
-    const contexto = await this.contexto(
-      rows.flatMap((row) => row.itens.map((item) => item.insumoId)),
-      empresaId,
+    const rows = (await this.repository.listByEmpresa(empresaId)).filter(
+      (row) => row.vendavel,
     );
+    const contexto = await this.contexto(rows.flatMap(insumoIdsDe), empresaId);
     return rows.map((row) => {
       const base = this.basePreco(row, contexto);
       const preco = (custo: CustoReceita) =>
@@ -277,13 +349,44 @@ export class ReceitaService {
       return {
         id: row.id,
         nome: row.nome,
-        insumoIds: row.itens.map((item) => item.insumoId),
+        insumoIds: [...new Set(insumoIdsDe(row))],
         precoSugerido: preco(this.calcular(row, contexto)),
         precoComCustoMedio: preco(
           this.calcular(row, contexto, 1, contexto.custoMedioPorInsumo),
         ),
       };
     });
+  }
+
+  /**
+   * Receitas usadas (BE-39): 404 se alguma não for da empresa; depois as
+   * regras de `validarItensDaReceita` (repetida, ela mesma, um nível só).
+   * Devolve os insumos das receitas usadas, para o custo (BE-40).
+   */
+  private async validarItens(
+    receitaId: number | null,
+    quantidadeInsumos: number,
+    receitas: ItemReceitaData[],
+    usadaEmOutra: boolean,
+    empresaId: number,
+  ): Promise<number[]> {
+    const ids = receitas.map((item) => item.receitaUsadaId);
+    const unicos = [...new Set(ids)];
+    const usadas = await this.repository.findParaUso(unicos, empresaId);
+    if (usadas.length !== unicos.length) {
+      throw new NotFoundError(
+        'RECEITA_NAO_ENCONTRADA',
+        'Receita não encontrada',
+      );
+    }
+    validarItensDaReceita({
+      receitaId,
+      quantidadeInsumos,
+      receitaUsadaIds: ids,
+      usadas,
+      usadaEmOutra,
+    });
+    return usadas.flatMap((usada) => usada.insumoIds);
   }
 
   private fichaInformada(
@@ -297,9 +400,16 @@ export class ReceitaService {
     };
   }
 
+  /**
+   * A receita com `vendavel: false` (BE-40) tem custo, mas não tem preço:
+   * sem `precoSugerido` e com `precos: []`.
+   */
   private toDto(row: ReceitaComItens, contexto: ContextoCusto): ReceitaDto {
     const custo = this.calcular(row, contexto);
     const base = this.basePreco(row, contexto);
+    if (!row.vendavel) {
+      return toReceitaDto(row, custo, base.lucro, null, []);
+    }
     const precos: PrecoDoCanal[] = contexto.canais.map((canal) => ({
       canalId: canal.id,
       canal: canal.nome,
@@ -344,17 +454,35 @@ export class ReceitaService {
     return ficha.lucroPercentual ?? contexto.configuracao.lucroPadrao;
   }
 
+  /**
+   * O mesmo mapa de custo dos insumos vale para os da receita usada (BE-40):
+   * reposição para o preço, custo médio para produção e venda.
+   */
   private calcular(
     receita: ReceitaComItens,
     contexto: ContextoCusto,
     lotes = 1,
     custoPorInsumo = contexto.custoPorInsumo,
   ): CustoReceita {
-    return calcularCustoReceita({
-      itens: receita.itens.map((item) => ({
+    const itensComCusto = (itens: { insumoId: number; quantidade: number }[]) =>
+      itens.map((item) => ({
         insumoId: item.insumoId,
         quantidade: item.quantidade,
         custoUnitario: custoPorInsumo.get(item.insumoId) ?? 0,
+      }));
+    return calcularCustoReceita({
+      itens: itensComCusto(receita.itens),
+      receitas: receita.receitasUsadas.map((item) => ({
+        receitaId: item.receitaUsadaId,
+        quantidade: item.quantidade,
+        custoUnitario: calcularCustoParaUsoEmReceita({
+          itens: itensComCusto(item.receitaUsada.itens),
+          rendimento: item.receitaUsada.rendimento,
+          usoPorLote: item.receitaUsada.usoPorLote,
+          perdaPercentual: item.receitaUsada.perdaPercentual,
+          gastos: contexto.gastos,
+          capacidadeMensal: contexto.configuracao.capacidadeMensal,
+        }),
       })),
       rendimento: receita.rendimento,
       usoPorLote: receita.usoPorLote,
@@ -371,11 +499,7 @@ export class ReceitaService {
     empresaId: number,
     tx?: PrismaTransaction,
   ): Promise<ContextoCusto> {
-    return this.contexto(
-      receita.itens.map((item) => item.insumoId),
-      empresaId,
-      tx,
-    );
+    return this.contexto(insumoIdsDe(receita), empresaId, tx);
   }
 
   /**
@@ -432,6 +556,20 @@ export class ReceitaService {
     }
     return row;
   }
+}
+
+/** Os insumos da receita e os das receitas usadas dentro dela (BE-40). */
+function insumoIdsDe(receita: ReceitaComItens): number[] {
+  return [
+    ...receita.itens.map((item) => item.insumoId),
+    ...receita.receitasUsadas.flatMap(({ receitaUsada }) =>
+      receitaUsada.itens.map((item) => item.insumoId),
+    ),
+  ];
+}
+
+function toItemReceitaData(item: ReceitaEntrada): ItemReceitaData {
+  return { receitaUsadaId: item.receita_id, quantidade: item.quantidade };
 }
 
 function toItemData(item: ItemEntrada): {

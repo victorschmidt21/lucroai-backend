@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { UnidadeMedida } from '../../../../generated/prisma/client.js';
 import { PrismaService } from '../../../../shared/infra/database/prisma.service.js';
 import type { PrismaTransaction } from '../../../../shared/infra/database/prisma.transaction.js';
 import type { ProducaoComRateios } from '../../application/dto/producao.dto.js';
@@ -9,6 +10,13 @@ interface RateioData {
   valorRateado: number;
 }
 
+interface ReceitaUsadaData {
+  receitaId: number;
+  nome: string;
+  quantidade: number;
+  unidade: UnidadeMedida;
+}
+
 interface ProducaoData {
   empresaId: number;
   receitaId: number;
@@ -17,9 +25,13 @@ interface ProducaoData {
   custoTotal: number;
   custoUnitario: number;
   rateios: RateioData[];
+  receitasUsadas: ReceitaUsadaData[];
 }
 
-const include = { rateios: { orderBy: { id: 'asc' } } } as const;
+const include = {
+  rateios: { orderBy: { id: 'asc' } },
+  receitasUsadas: { orderBy: { id: 'asc' } },
+} as const;
 
 @Injectable()
 export class ProducaoRepository {
@@ -47,13 +59,17 @@ export class ProducaoRepository {
     });
   }
 
-  /** Produção e rateios num único insert aninhado. */
+  /** Produção, rateios e receitas usadas num único insert aninhado. */
   create(
-    { rateios, ...data }: ProducaoData,
+    { rateios, receitasUsadas, ...data }: ProducaoData,
     tx: PrismaTransaction,
   ): Promise<ProducaoComRateios> {
     return tx.producao.create({
-      data: { ...data, rateios: { create: rateios } },
+      data: {
+        ...data,
+        rateios: { create: rateios },
+        receitasUsadas: { create: receitasUsadas },
+      },
       include,
     });
   }

@@ -1,5 +1,7 @@
 import { round6 } from '../../../shared/domain/arredondamento.js';
 import {
+  BusinessRuleError,
+  ConflictError,
   type DetalheErro,
   InvalidInputError,
 } from '../../../shared/domain/errors/domain.error.js';
@@ -140,6 +142,103 @@ export function lucroPercentualInformado(corpo: {
   if (corpo.lucro_percentual !== undefined) return corpo.lucro_percentual;
   if (corpo.margem_lucro === undefined) return undefined;
   return corpo.margem_lucro === null ? null : lucroDaMargem(corpo.margem_lucro);
+}
+
+/** Receita usada dentro de outra (BE-39), já conferida contra a empresa. */
+export interface ReceitaParaUso {
+  id: number;
+  /** Se ela mesma já usa receitas dentro. */
+  temReceitas: boolean;
+}
+
+export interface ItensDaReceita {
+  /** `null` no cadastro. */
+  receitaId: number | null;
+  quantidadeInsumos: number;
+  /** Ids da lista `receitas` do corpo (ou os salvos), na ordem. */
+  receitaUsadaIds: number[];
+  /** As receitas da lista, buscadas na empresa. */
+  usadas: ReceitaParaUso[];
+  /** Se a receita já é usada dentro de outra. */
+  usadaEmOutra: boolean;
+}
+
+/**
+ * Itens da receita (BE-39): ao menos um insumo ou receita; sem receita
+ * repetida (400 `DADOS_INVALIDOS`); sem usar a si mesma (422
+ * `RECEITA_USA_ELA_MESMA`) e **um nível só** (422
+ * `RECEITA_DENTRO_DE_RECEITA_COM_RECEITA`): a receita usada não pode ter
+ * receitas dentro, e a que já é usada em outra não pode ganhar receitas.
+ */
+export function validarItensDaReceita(itens: ItensDaReceita): void {
+  const ids = itens.receitaUsadaIds;
+  if (itens.quantidadeInsumos + ids.length === 0) {
+    throw new InvalidInputError(
+      'DADOS_INVALIDOS',
+      'Os dados enviados são inválidos',
+      [
+        {
+          field: 'insumos',
+          messages: ['a receita precisa de ao menos um insumo ou receita'],
+        },
+      ],
+    );
+  }
+  if (new Set(ids).size !== ids.length) {
+    throw new InvalidInputError(
+      'DADOS_INVALIDOS',
+      'Os dados enviados são inválidos',
+      [{ field: 'receitas', messages: ['receitas não pode repetir receita'] }],
+    );
+  }
+  if (itens.receitaId !== null && ids.includes(itens.receitaId)) {
+    throw new BusinessRuleError(
+      'RECEITA_USA_ELA_MESMA',
+      'A receita não pode ser usada dentro dela mesma',
+    );
+  }
+  if (ids.length > 0 && itens.usadaEmOutra) {
+    throw new BusinessRuleError(
+      'RECEITA_DENTRO_DE_RECEITA_COM_RECEITA',
+      'Esta receita já é usada dentro de outra, então não pode ter receitas dentro',
+    );
+  }
+  if (itens.usadas.some((usada) => usada.temReceitas)) {
+    throw new BusinessRuleError(
+      'RECEITA_DENTRO_DE_RECEITA_COM_RECEITA',
+      'Só dá para usar receitas que levam apenas ingredientes',
+    );
+  }
+}
+
+/**
+ * Receita usada dentro de outras não pode ser excluída (BE-39): 409
+ * `RECEITA_EM_USO` com os nomes de quem a usa.
+ */
+export function validarExclusaoDaReceita(usadaEm: string[]): void {
+  if (usadaEm.length > 0) {
+    throw new ConflictError(
+      'RECEITA_EM_USO',
+      `Receita usada em outras receitas não pode ser excluída: ${usadaEm.join(', ')}`,
+    );
+  }
+}
+
+/**
+ * A unidade do rendimento de uma receita usada em outras não muda (BE-39):
+ * as quantidades delas estão nessa unidade. 409 `RECEITA_EM_USO`.
+ */
+export function validarMudancaDeUnidade(
+  atual: string,
+  nova: string | undefined,
+  usadaEm: string[],
+): void {
+  if (nova !== undefined && nova !== atual && usadaEm.length > 0) {
+    throw new ConflictError(
+      'RECEITA_EM_USO',
+      `A unidade do rendimento não pode mudar enquanto a receita é usada em: ${usadaEm.join(', ')}`,
+    );
+  }
 }
 
 export interface ItemParaCusto {
@@ -403,8 +502,27 @@ export function calcularPercentuaisSemLucro(
   );
 }
 
+/** Receita usada dentro de outra (BE-40), com o custo de 1 unidade dela. */
+export interface ReceitaUsadaParaCusto {
+  receitaId: number;
+  /** Por lote, na unidade do rendimento da receita usada. */
+  quantidade: number;
+  /** `calcularCustoParaUsoEmReceita` da receita usada, sem arredondar. */
+  custoUnitario: number;
+}
+
+export interface ReceitaUsadaCalculada {
+  receitaId: number;
+  quantidade: number;
+  custoUnitario: number;
+  /** `quantidade × custoUnitario`, sem arredondar. */
+  custoCalculado: number;
+}
+
 export interface CustoReceitaInput {
   itens: ItemParaCusto[];
+  /** Receitas usadas dentro desta (BE-40); `[]` se omitido. */
+  receitas?: ReceitaUsadaParaCusto[];
   rendimento: number;
   /** Fornadas ou minutos de 1 lote (BE-27); 1 se omitido. */
   usoPorLote?: number;
@@ -423,10 +541,12 @@ export interface CustoReceitaInput {
 export interface CustoReceita {
   /** Itens com a quantidade e o custo para `lotes` lotes. */
   itens: ItemCalculado[];
+  /** Receitas usadas com a quantidade e o custo para `lotes` lotes (BE-40). */
+  receitas: ReceitaUsadaCalculada[];
   lotes: number;
   /** `rendimento × lotes`. */
   totalUnidades: number;
-  /** Soma dos itens (custo dos ingredientes) de `lotes` lotes. */
+  /** Soma dos itens e das receitas usadas (custo dos ingredientes) de `lotes` lotes. */
   custoIngredientes: number;
   /** Gastos `MENSAL` e `POR_UNIDADE` de `lotes` lotes. */
   custoInvisivel: number;
@@ -447,6 +567,41 @@ export function calcularCustoItem(
   custoUnitario: number,
 ): number {
   return quantidade * custoUnitario;
+}
+
+/**
+ * Custo de 1 unidade (grama, ml ou unidade do rendimento) de uma receita
+ * usada dentro de outra (BE-40):
+ * `(ingredientesLote + gastosMensaisLote) ÷ rendimento ÷ (1 − perda)`.
+ * Só ingredientes, forno e perda: a embalagem e os gastos `POR_UNIDADE` não
+ * entram, porque já entram no produto final. A receita usada só tem insumos
+ * (um nível, BE-39). Sem arredondar (BE-23).
+ */
+export function calcularCustoParaUsoEmReceita(
+  input: Omit<CustoReceitaInput, 'receitas' | 'lotes'>,
+): number {
+  return calcularCustoUnitario({
+    ingredientesLote: somarItens(input.itens),
+    gastosMensaisLote: somarGastosMensaisLote(
+      input.gastos,
+      input.usoPorLote ?? 1,
+      input.capacidadeMensal,
+    ),
+    rendimento: input.rendimento,
+    embalagemPorUnidade: 0,
+    gastosPorUnidade: 0,
+    perdaPercentual: input.perdaPercentual ?? 0,
+  }).custoUnitario;
+}
+
+function somarItens(
+  itens: { quantidade: number; custoUnitario: number }[],
+): number {
+  return itens.reduce(
+    (total, item) =>
+      total + calcularCustoItem(item.quantidade, item.custoUnitario),
+    0,
+  );
 }
 
 /**
@@ -482,7 +637,8 @@ export function calcularCustoInvisivel(
  * é gravado. **Muda (BE-28):** o custo unitário é o de
  * `calcularCustoUnitario` (com embalagem e perda), igual para qualquer número
  * de lotes, e o custo de produção é `custoUnitario × totalUnidades`. O preço
- * sai de `calcularPreco`, por canal.
+ * sai de `calcularPreco`, por canal. **Muda (BE-40):** os ingredientes
+ * somam também `quantidade × custo de 1 unidade` de cada receita usada.
  */
 export function calcularCustoReceita(input: CustoReceitaInput): CustoReceita {
   if (input.rendimento <= 0) {
@@ -501,16 +657,22 @@ export function calcularCustoReceita(input: CustoReceitaInput): CustoReceita {
       custoCalculado: calcularCustoItem(quantidade, item.custoUnitario),
     };
   });
-  const custoIngredientes = itens.reduce(
+  const receitasUsadas = input.receitas ?? [];
+  const receitas = receitasUsadas.map((item) => {
+    const quantidade = item.quantidade * lotes;
+    return {
+      receitaId: item.receitaId,
+      quantidade,
+      custoUnitario: item.custoUnitario,
+      custoCalculado: calcularCustoItem(quantidade, item.custoUnitario),
+    };
+  });
+  const custoIngredientes = [...itens, ...receitas].reduce(
     (total, item) => total + item.custoCalculado,
     0,
   );
   const detalhe = calcularCustoUnitario({
-    ingredientesLote: input.itens.reduce(
-      (total, item) =>
-        total + calcularCustoItem(item.quantidade, item.custoUnitario),
-      0,
-    ),
+    ingredientesLote: somarItens(input.itens) + somarItens(receitasUsadas),
     gastosMensaisLote: somarGastosMensaisLote(
       input.gastos,
       usoPorLote,
@@ -524,6 +686,7 @@ export function calcularCustoReceita(input: CustoReceitaInput): CustoReceita {
   const totalUnidades = input.rendimento * lotes;
   return {
     itens,
+    receitas,
     lotes,
     totalUnidades,
     custoIngredientes,
