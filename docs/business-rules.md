@@ -118,12 +118,13 @@ custoMedio  = saldo ≤ 0 ? custoCompra
 | `lucroPadrao` | lucro como fração do **preço de venda** | 0,15 |
 | `impostoPercentual` | imposto como fração do preço (informal ou MEI: 0; o DAS do MEI entra como gasto mensal) | 0 |
 | `taxaMaquininha` | taxa cobrada no balcão, fração do preço | 0 |
+| `valorHora` | reais por hora do trabalho da dona (**novo**, BE-45) | 0 |
 
 - Os padrões servem para quem está começando e ainda não fatura. Ficam em `CONFIGURACAO_CUSTOS_PADRAO` (`configuracao-custos/domain/configuracao-custos.calculos.ts`) e são também os defaults das colunas.
 - A configuração nasce no cadastro da empresa (`ConfiguracaoCustosService.criarPadrao(empresaId, tx)`, chamado pelo `auth` na transação do cadastro), no seed (que grava a da padaria de demonstração: 100 fornadas e maquininha de 1,36%, BE-33) e, para as empresas que já existiam, na própria migration `criar_configuracao_custos`.
-- Validação (`validarConfiguracaoCustos`), feita depois de mesclar o `PUT` com os valores salvos: `capacidadeMensal > 0`; `lucroPadrao`, `impostoPercentual` e `taxaMaquininha` entre 0 e 1, inclusive. Erro → 400 `DADOS_INVALIDOS`, um `details` por campo, no formato do `ValidationPipe`.
+- Validação (`validarConfiguracaoCustos`), feita depois de mesclar o `PUT` com os valores salvos: `capacidadeMensal > 0`; `lucroPadrao`, `impostoPercentual` e `taxaMaquininha` entre 0 e 1, inclusive; `valorHora` finito e ≥ 0 (BE-45). Erro → 400 `DADOS_INVALIDOS`, um `details` por campo, no formato do `ValidationPipe`.
 - Os valores são gravados e devolvidos como vieram, sem arredondar.
-- Sem pró-labore, regime tributário, anexo do Simples nem faturamento: decisão de simplicidade da BE-24. `capacidadeMensal` divide os gastos `MENSAL`; `lucroPadrao`, `impostoPercentual` e `taxaMaquininha` entram no [preço por canal](#preço-por-canal) (BE-28).
+- Sem regime tributário, anexo do Simples nem faturamento: decisão de simplicidade da BE-24. **Muda (BE-45):** o "sem pró-labore" da BE-24 é revisto só no trabalho da dona: o `valorHora` (padrão 0, então nada muda até ela preencher) vezes os `minutosTrabalhoPorLote` da [ficha técnica](#ficha-técnica) vira custo, não lucro (o `lucroPadrao` continua 15%). A BE-45 só cadastra os dois campos; o cálculo no custo é a BE-46. Lançar o trabalho como gasto mensal está errado: o gasto mensal é dividido pelas fornadas, e um lote de brigadeiro sem forno pagaria o mesmo que um bolo de 3 h. Na interface é "seu trabalho" e "valor da sua hora". `capacidadeMensal` divide os gastos `MENSAL`; `lucroPadrao`, `impostoPercentual` e `taxaMaquininha` entram no [preço por canal](#preço-por-canal) (BE-28).
 - A soma lucro + imposto + maquininha (+ comissão e gastos `PERCENTUAL_VENDA`) ≥ 1 **não** é barrada no `PUT`: cada canal com percentuais ≥ 100% vem sem preço e com o motivo `PERCENTUAIS_ACIMA_DE_100` (BE-28).
 
 ## Canais de venda
@@ -253,6 +254,7 @@ Detalhamento na resposta da receita (`custo`): `ingredientesLote` e `gastosMensa
 | `embalagem_por_unidade` / `embalagemPorUnidade` | reais por unidade (caixa, pote ou saquinho do próprio produto) | 0 | ≥ 0 |
 | `perda_percentual` / `perdaPercentual` | fração das unidades que não são vendidas (sobra, queima) | 0 | 0 ≤ perda < 1 |
 | `lucro_percentual` / `lucroPercentual` | lucro como fração do **preço** | vazio: usa o `lucroPadrao` da empresa | 0 ≤ lucro < 1 |
+| `minutos_trabalho_por_lote` / `minutosTrabalhoPorLote` | minutos em que a dona fica ocupada com 1 lote (preparar, mexer, montar, embalar), **sem** o tempo em que a receita fica sozinha no forno ou na geladeira; diferente do `usoPorLote` (forno) (**novo**, BE-45) | 0 | ≥ 0, finito |
 
 - `rendimento` passa a ser **unidades boas** por lote (as vendáveis).
 - **Removidos (BE-27):** a coluna `margem_lucro` (markup sobre o custo) e as de custo congelado (`custo_producao`, `custo_unitario`, `preco_sugerido` da receita e `custo_calculado` do item). Sem migração de dados (não há dados reais): a migration `altera_ficha_tecnica_da_receita` apaga as colunas.
@@ -260,6 +262,7 @@ Detalhamento na resposta da receita (`custo`): `ingredientesLote` e `gastosMensa
 - Perda ou lucro ≥ 1 não deixam preço possível (divisão por zero) → 400 `DADOS_INVALIDOS`, com `details` no campo do corpo (`perda_percentual`, `lucro_percentual`). O DTO confere o tipo e o mínimo; o limite superior, e o `PUT` mesclado com o salvo, são conferidos por `validarFichaTecnica`.
 - Na resposta, `lucroPercentual` é omitido quando a receita usa o lucro padrão (como os outros campos sem valor da receita) e sai com 4 casas.
 - **Compatibilidade com o frontend atual:** o formulário ainda envia `margem_lucro` (markup). Ela é aceita e convertida em `lucro_percentual = margem ÷ (1 + margem)`, o que dá o mesmo preço sugerido (`custo × (1 + margem) = custo ÷ (1 − lucro)`); se vierem os dois, vale o `lucro_percentual`. `margem_lucro: null` volta ao lucro padrão. O legado continua enquanto o frontend atual o exigir ([api.md](api.md#campos-legados-mantidos)).
+- `minutosTrabalhoPorLote` (BE-45) só é gravado e devolvido como veio; entra no custo na BE-46. A migration `adiciona_valor_hora_e_minutos_trabalho` deixa as receitas e configurações existentes com 0, sem mudar o custo delas. Negativo → 400 `DADOS_INVALIDOS` com `details` em `minutos_trabalho_por_lote`.
 - Funções puras: `FICHA_TECNICA_PADRAO`, `resolverFichaTecnica(informada, salva?)` (omitido ou `null` mantém o salvo, menos `lucroPercentual`, em que `null` volta ao padrão), `validarFichaTecnica`, `lucroDaMargem`, `margemDoLucro` e `lucroPercentualInformado`.
 
 ### Edição
