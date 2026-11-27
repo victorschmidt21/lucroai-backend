@@ -767,18 +767,19 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
 
   // Produções com todos os gastos, como POST /producoes sem
   // gasto_indireto_ids (BE-30): ingredientes ao custo médio e os gastos
-  // mensais do forno; baixa dos insumos (SAIDA/PRODUCAO) e entrada no
+  // mensais do forno, mais o seu trabalho (BE-47); baixa dos insumos (SAIDA/PRODUCAO) e entrada no
   // produto acabado.
   const saldoProduto = new Map<number, number>();
   for (const def of PRODUCOES) {
     const r = receita(def.receita);
     const data = diasAtras(def.diasAtras);
+    const { detalhe } = custoDe(def.receita, 'medio');
     const calculo = calcularProducao(
       {
         rendimento: r.def.rendimento,
-        ingredientesLote: custoDe(def.receita, 'medio').detalhe
-          .ingredientesLote,
+        ingredientesLote: detalhe.ingredientesLote,
         usoPorLote: r.def.usoPorLote,
+        trabalhoLote: detalhe.trabalhoLote,
       },
       def.lotes,
       gastos,
@@ -792,6 +793,7 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
         totalUnidades: calculo.totalUnidades,
         custoTotal: calculo.custoTotal,
         custoUnitario: calculo.custoUnitario,
+        custoTrabalho: calculo.custoTrabalho,
         dataProducao: data,
         rateios: { create: calculo.rateios },
       },
