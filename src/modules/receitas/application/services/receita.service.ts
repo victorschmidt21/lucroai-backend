@@ -457,7 +457,8 @@ export class ReceitaService {
 
   /**
    * O mesmo mapa de custo dos insumos vale para os da receita usada (BE-40):
-   * reposição para o preço, custo médio para produção e venda.
+   * reposição para o preço, custo médio para produção e venda. O valor da
+   * hora é o atual da empresa (BE-46): mudá-lo muda a próxima leitura.
    */
   private calcular(
     receita: ReceitaComItens,
@@ -481,6 +482,8 @@ export class ReceitaService {
           rendimento: item.receitaUsada.rendimento,
           usoPorLote: item.receitaUsada.usoPorLote,
           perdaPercentual: item.receitaUsada.perdaPercentual,
+          minutosTrabalhoPorLote: item.receitaUsada.minutosTrabalhoPorLote,
+          valorHora: contexto.configuracao.valorHora,
           gastos: contexto.gastos,
           capacidadeMensal: contexto.configuracao.capacidadeMensal,
         }),
@@ -489,6 +492,8 @@ export class ReceitaService {
       usoPorLote: receita.usoPorLote,
       embalagemPorUnidade: receita.embalagemPorUnidade,
       perdaPercentual: receita.perdaPercentual,
+      minutosTrabalhoPorLote: receita.minutosTrabalhoPorLote,
+      valorHora: contexto.configuracao.valorHora,
       gastos: contexto.gastos,
       capacidadeMensal: contexto.configuracao.capacidadeMensal,
       lotes,

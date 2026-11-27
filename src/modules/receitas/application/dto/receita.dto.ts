@@ -35,8 +35,9 @@ export class ItemReceitaReceitaDto {
   /** `unidadeRendimento` da receita usada. @example 'G' */
   unidade: UnidadeMedida;
   /**
-   * Custo de 1 unidade da receita usada (ingredientes + forno + perda, sem
-   * embalagem nem gastos por unidade; BE-40), com 4 casas. @example 0.035
+   * Custo de 1 unidade da receita usada (ingredientes + forno + seu
+   * trabalho + perda, sem embalagem nem gastos por unidade; BE-40 e BE-46),
+   * com 4 casas. @example 0.035
    */
   custoUnitario: number;
   /** `quantidade × custoUnitario`, com 2 casas. @example 5.25 */
@@ -57,10 +58,14 @@ export class CustoReceitaDetalheDto {
   ingredientesLote: number;
   /** Gastos `MENSAL` de 1 lote (`Σ valor × usoPorLote ÷ capacidadeMensal`), com 2 casas. @example 24.35 */
   gastosMensaisLote: number;
+  /** Seu trabalho em 1 lote (`minutosTrabalhoPorLote ÷ 60 × valorHora`, BE-46), com 2 casas. @example 12.5 */
+  trabalhoLote: number;
   /** `ingredientesLote ÷ rendimento`, com 4 casas. @example 0.0661 */
   ingredientes: number;
   /** `gastosMensaisLote ÷ rendimento`, com 4 casas. @example 0.487 */
   gastosMensais: number;
+  /** `trabalhoLote ÷ rendimento` (BE-46), com 4 casas. @example 0.25 */
+  trabalho: number;
   /** Soma dos gastos `POR_UNIDADE`, com 4 casas. @example 0 */
   gastosPorUnidade: number;
   /** `embalagemPorUnidade`, com 4 casas. @example 0 */
@@ -83,6 +88,8 @@ export class ParteDoPrecoDto {
 export class ComposicaoPrecoDto {
   ingredientes: ParteDoPrecoDto;
   gastosMensais: ParteDoPrecoDto;
+  /** Seu trabalho (BE-46). */
+  trabalho: ParteDoPrecoDto;
   gastosPorUnidade: ParteDoPrecoDto;
   embalagem: ParteDoPrecoDto;
   perdas: ParteDoPrecoDto;
@@ -180,6 +187,7 @@ export type ReceitaComItens = Receita & {
       rendimento: number;
       usoPorLote: number;
       perdaPercentual: number;
+      minutosTrabalhoPorLote: number;
       itens: { insumoId: number; quantidade: number }[];
     };
   })[];
@@ -251,8 +259,10 @@ function toCustoReceitaDetalheDto(
   return {
     ingredientesLote: round2(d.ingredientesLote),
     gastosMensaisLote: round2(d.gastosMensaisLote),
+    trabalhoLote: round2(d.trabalhoLote),
     ingredientes: round4(d.ingredientes),
     gastosMensais: round4(d.gastosMensais),
+    trabalho: round4(d.trabalho),
     gastosPorUnidade: round4(d.gastosPorUnidade),
     embalagem: round4(d.embalagem),
     perdas: round4(d.perdas),
@@ -281,6 +291,7 @@ function toComposicaoPrecoDto(c: ComposicaoPreco): ComposicaoPrecoDto {
   return {
     ingredientes: parte(c.ingredientes),
     gastosMensais: parte(c.gastosMensais),
+    trabalho: parte(c.trabalho),
     gastosPorUnidade: parte(c.gastosPorUnidade),
     embalagem: parte(c.embalagem),
     perdas: parte(c.perdas),

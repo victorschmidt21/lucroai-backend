@@ -46,6 +46,7 @@ const include = {
           rendimento: true,
           usoPorLote: true,
           perdaPercentual: true,
+          minutosTrabalhoPorLote: true,
           itens: {
             orderBy: { id: 'asc' },
             select: { insumoId: true, quantidade: true },

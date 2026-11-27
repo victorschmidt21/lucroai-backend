@@ -317,11 +317,24 @@ export function somarGastosPercentuais(gastos: GastoParaCusto[]): number {
     .reduce((total, gasto) => total + gasto.valor, 0);
 }
 
+/**
+ * Seu trabalho em 1 lote (BE-46): `minutosTrabalhoPorLote ÷ 60 × valorHora`.
+ * Sem arredondar (BE-23).
+ */
+export function calcularTrabalhoLote(
+  minutosTrabalhoPorLote: number,
+  valorHora: number,
+): number {
+  return (minutosTrabalhoPorLote / 60) * valorHora;
+}
+
 export interface CustoUnitarioInput {
   /** `Σ quantidade × custo do insumo` de 1 lote. */
   ingredientesLote: number;
   /** `somarGastosMensaisLote`. */
   gastosMensaisLote: number;
+  /** `calcularTrabalhoLote` (BE-46); 0 se omitido. */
+  trabalhoLote?: number;
   /** Unidades boas por lote, > 0. */
   rendimento: number;
   embalagemPorUnidade: number;
@@ -333,14 +346,18 @@ export interface CustoUnitarioInput {
 
 /**
  * Custo de 1 unidade e de onde ele vem (BE-28). As partes por unidade
- * (`ingredientes`, `gastosMensais`, `gastosPorUnidade`, `embalagem` e
- * `perdas`) somam o `custoUnitario`.
+ * (`ingredientes`, `gastosMensais`, `trabalho`, `gastosPorUnidade`,
+ * `embalagem` e `perdas`) somam o `custoUnitario`.
  */
 export interface CustoUnitarioDetalhado {
   ingredientesLote: number;
   gastosMensaisLote: number;
+  /** Seu trabalho em 1 lote (BE-46). */
+  trabalhoLote: number;
   ingredientes: number;
   gastosMensais: number;
+  /** `trabalhoLote ÷ rendimento` (BE-46), antes da perda. */
+  trabalho: number;
   gastosPorUnidade: number;
   embalagem: number;
   /** O que a perda acrescenta: `custoUnitario − custo sem perda`. */
@@ -348,36 +365,47 @@ export interface CustoUnitarioDetalhado {
   custoUnitario: number;
   /**
    * O custo variável (BE-31): `custoUnitario` sem a parte dos gastos
-   * `MENSAL`, `(ingredientes + embalagem + gastosPorUnidade) ÷ (1 − perda)`.
-   * É o que a margem de contribuição desconta.
+   * `MENSAL`, `(ingredientes + trabalho + embalagem + gastosPorUnidade) ÷
+   * (1 − perda)`. É o que a margem de contribuição desconta. O trabalho
+   * entra porque não depende da capacidade do mês (BE-46).
    */
   custoSemGastosMensais: number;
 }
 
 /**
  * **Muda (BE-28):**
- * `((ingredientesLote + gastosMensaisLote) ÷ rendimento + embalagem +
- * gastosPorUnidade) ÷ (1 − perda)`. Sem arredondar (BE-23).
+ * `((ingredientesLote + gastosMensaisLote + trabalhoLote) ÷ rendimento +
+ * embalagem + gastosPorUnidade) ÷ (1 − perda)`. **Muda (BE-46):** o
+ * trabalho entra antes da perda, porque a unidade perdida também levou
+ * trabalho. Sem arredondar (BE-23).
  */
 export function calcularCustoUnitario(
   input: CustoUnitarioInput,
 ): CustoUnitarioDetalhado {
+  const trabalhoLote = input.trabalhoLote ?? 0;
   const ingredientes = input.ingredientesLote / input.rendimento;
   const gastosMensais = input.gastosMensaisLote / input.rendimento;
+  const trabalho = trabalhoLote / input.rendimento;
   const semPerda =
     ingredientes +
     gastosMensais +
+    trabalho +
     input.embalagemPorUnidade +
     input.gastosPorUnidade;
   const custoUnitario = semPerda / (1 - input.perdaPercentual);
   const custoSemGastosMensais =
-    (ingredientes + input.embalagemPorUnidade + input.gastosPorUnidade) /
+    (ingredientes +
+      trabalho +
+      input.embalagemPorUnidade +
+      input.gastosPorUnidade) /
     (1 - input.perdaPercentual);
   return {
     ingredientesLote: input.ingredientesLote,
     gastosMensaisLote: input.gastosMensaisLote,
+    trabalhoLote,
     ingredientes,
     gastosMensais,
+    trabalho,
     gastosPorUnidade: input.gastosPorUnidade,
     embalagem: input.embalagemPorUnidade,
     perdas: custoUnitario - semPerda,
@@ -409,6 +437,8 @@ export interface ParteDoPreco {
 export interface ComposicaoPreco {
   ingredientes: ParteDoPreco;
   gastosMensais: ParteDoPreco;
+  /** Seu trabalho (BE-46). */
+  trabalho: ParteDoPreco;
   gastosPorUnidade: ParteDoPreco;
   embalagem: ParteDoPreco;
   perdas: ParteDoPreco;
@@ -469,6 +499,7 @@ export function calcularPreco(
     composicao: {
       ingredientes: emReais(custo.ingredientes),
       gastosMensais: emReais(custo.gastosMensais),
+      trabalho: emReais(custo.trabalho),
       gastosPorUnidade: emReais(custo.gastosPorUnidade),
       embalagem: emReais(custo.embalagem),
       perdas: emReais(custo.perdas),
@@ -548,6 +579,10 @@ export interface CustoReceitaInput {
   embalagemPorUnidade?: number;
   /** Fração das unidades perdidas (BE-27); 0 se omitido. */
   perdaPercentual?: number;
+  /** Minutos de trabalho de 1 lote (BE-45); 0 se omitido. */
+  minutosTrabalhoPorLote?: number;
+  /** Da configuração de custos (BE-45), reais por hora; 0 se omitido. */
+  valorHora?: number;
   /** Todos os gastos indiretos da empresa (lacuna 18). */
   gastos: GastoParaCusto[];
   /** Da configuração de custos da empresa (BE-24): divide os gastos `MENSAL`. */
@@ -590,10 +625,11 @@ export function calcularCustoItem(
 /**
  * Custo de 1 unidade (grama, ml ou unidade do rendimento) de uma receita
  * usada dentro de outra (BE-40):
- * `(ingredientesLote + gastosMensaisLote) ÷ rendimento ÷ (1 − perda)`.
- * Só ingredientes, forno e perda: a embalagem e os gastos `POR_UNIDADE` não
- * entram, porque já entram no produto final. A receita usada só tem insumos
- * (um nível, BE-39). Sem arredondar (BE-23).
+ * `(ingredientesLote + gastosMensaisLote + trabalhoLote) ÷ rendimento ÷
+ * (1 − perda)`. Ingredientes, forno, seu trabalho (BE-46) e perda: a
+ * embalagem e os gastos `POR_UNIDADE` não entram, porque já entram no
+ * produto final. Na receita que usa, os minutos são só os da montagem. A
+ * receita usada só tem insumos (um nível, BE-39). Sem arredondar (BE-23).
  */
 export function calcularCustoParaUsoEmReceita(
   input: Omit<CustoReceitaInput, 'receitas' | 'lotes'>,
@@ -605,11 +641,22 @@ export function calcularCustoParaUsoEmReceita(
       input.usoPorLote ?? 1,
       input.capacidadeMensal,
     ),
+    trabalhoLote: trabalhoLoteDe(input),
     rendimento: input.rendimento,
     embalagemPorUnidade: 0,
     gastosPorUnidade: 0,
     perdaPercentual: input.perdaPercentual ?? 0,
   }).custoUnitario;
+}
+
+function trabalhoLoteDe(input: {
+  minutosTrabalhoPorLote?: number;
+  valorHora?: number;
+}): number {
+  return calcularTrabalhoLote(
+    input.minutosTrabalhoPorLote ?? 0,
+    input.valorHora ?? 0,
+  );
 }
 
 function somarItens(
@@ -657,6 +704,8 @@ export function calcularCustoInvisivel(
  * de lotes, e o custo de produção é `custoUnitario × totalUnidades`. O preço
  * sai de `calcularPreco`, por canal. **Muda (BE-40):** os ingredientes
  * somam também `quantidade × custo de 1 unidade` de cada receita usada.
+ * **Muda (BE-46):** o custo unitário soma seu trabalho
+ * (`minutosTrabalhoPorLote ÷ 60 × valorHora` por lote).
  */
 export function calcularCustoReceita(input: CustoReceitaInput): CustoReceita {
   if (input.rendimento <= 0) {
@@ -696,6 +745,7 @@ export function calcularCustoReceita(input: CustoReceitaInput): CustoReceita {
       usoPorLote,
       input.capacidadeMensal,
     ),
+    trabalhoLote: trabalhoLoteDe(input),
     rendimento: input.rendimento,
     embalagemPorUnidade: input.embalagemPorUnidade ?? 0,
     gastosPorUnidade: somarGastosPorUnidade(input.gastos),
