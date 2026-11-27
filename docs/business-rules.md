@@ -249,7 +249,7 @@ trabalho     = trabalhoLote ÷ rendimento                   // por unidade, ante
 - Entra no custo variável (`custoSemGastosMensais`): não depende da capacidade do mês.
 - O `valorHora` é o atual da configuração de custos: mudá-lo muda custo e preço na próxima leitura (nada é gravado). Com `valorHora` 0 (o padrão) ou minutos 0, custo e preço ficam iguais aos de antes.
 - O lucro padrão continua 15% sobre o preço: o trabalho é custo, não lucro.
-- Preço por canal, composição (parte `trabalho`), simulação, ponto de equilíbrio, preço de venda e alerta de preço defasado seguem o custo novo sem mudança de fórmula. `buscarDaEmpresa` (produção e venda) também: a venda copia o `custoUnitario` com o trabalho. A produção soma o trabalho das receitas usadas pelo `custoParaUso` ([Custo com receita dentro de receita](#custo-com-receita-dentro-de-receita)); o trabalho da própria receita na produção é a BE-47.
+- Preço por canal, composição (parte `trabalho`), simulação, ponto de equilíbrio, preço de venda e alerta de preço defasado seguem o custo novo sem mudança de fórmula. `buscarDaEmpresa` (produção e venda) também: a venda copia o `custoUnitario` com o trabalho. A produção soma o trabalho das receitas usadas pelo `custoParaUso` ([Custo com receita dentro de receita](#custo-com-receita-dentro-de-receita)) e, desde a BE-47, o da própria receita, gravado em `custoTrabalho` ([Produções](#produções)).
 
 Exemplo (critério da BE-46): com o valor da hora de R$ 18,75, um lote de 40 min rende `40 ÷ 60 × 18,75` = R$ 12,50 de trabalho; se rende 50 unidades, soma **R$ 0,25** por unidade. Com perda de 10%, soma `0,25 ÷ 0,9` = **R$ 0,2778** ao custo unitário (R$ 0,25 em `trabalho` e R$ 0,0278 em `perdas`). Sem imposto, taxa nem gastos de venda, o preço sobe `0,25 ÷ 0,85` = R$ 0,2941 com o lucro de 15%.
 
@@ -467,12 +467,15 @@ totalUnidades     = quantidade × receita.rendimento
 custoIngredientes = receita.custo.detalhe.ingredientesLote × quantidade     // Σ item.quantidade × insumo.custoMedio (BE-30)
 rateios           = gastos MENSAL
                       .map(g => g.valor × usoPorLote × quantidade ÷ capacidadeMensal)   // calcularGastoNoCusto
-custoTotal        = custoIngredientes + Σ rateios
+custoTrabalho     = receita.custo.detalhe.trabalhoLote × quantidade         // seu trabalho (BE-47), com o valor da hora de agora
+custoTotal        = custoIngredientes + Σ rateios + custoTrabalho
 custoUnitario     = totalUnidades > 0 ? custoTotal / totalUnidades : 0
 ```
 
 Exemplo (critério da BE-30): 2 lotes do pão francês (ingredientes de R$ 3,305 por lote, gastos mensais de R$ 2.435, capacidade de 100 fornadas, 1 fornada por lote) custam `6,61 + 2.435 × 2 ÷ 100 = 6,61 + 48,70` = **R$ 55,31**, com os gastos de 2 fornadas uma vez só. Até a BE-29, o custo da receita (que já tinha todos os gastos) era multiplicado pelos lotes e os gastos eram rateados de novo por cima.
 
+- **Novo (BE-47): seu trabalho.** `custoTrabalho = lotes × trabalhoLote` ([Seu trabalho no custo](#seu-trabalho-no-custo)) entra no `custoTotal` como os ingredientes e o forno, e fica gravado na coluna `custo_trabalho`: mudar o valor da hora depois **não** muda produções antigas (como o rateio). Exemplo (critério da BE-47): 2 lotes com R$ 12,50 de trabalho por lote (40 min a R$ 18,75) gravam `custoTrabalho` **25** e somam R$ 25 ao `custoTotal`. O custo é por lote e o `rendimento` já é de unidades boas, então o trabalho das unidades perdidas já está nas boas (`custoUnitario = custoTotal ÷ lotes × rendimento`), sem fórmula de perda na produção. As produções anteriores à BE-47 ficam com `custoTrabalho` `null` (lido como 0; o `custoTotal` delas não tem trabalho). Com `valorHora` 0 (o padrão) ou minutos 0, `custoTrabalho` é 0 e nada muda.
+- Não há custo médio do estoque pronto: o saldo de produto acabado só guarda quantidades, e a venda copia o `custoUnitario` da receita (`buscarDaEmpresa`, que já tem o trabalho desde a BE-46), não o da produção. Por isso a margem realizada e o lucro real das vendas não precisaram de fórmula nova na BE-47.
 - **Muda (BE-30):** só os gastos `MENSAL` geram rateio. `POR_UNIDADE`, embalagem e perda são custos da unidade **vendida** e ficam no custo da receita e no da venda; `PERCENTUAL_VENDA` é fração do preço, não custo. Por isso o `custoUnitario` da produção é menor que o da receita: ele mede o que o lote custou para sair do forno.
 - **Muda (BE-30):** os ingredientes entram ao `custoMedio` dos insumos ([Insumos](#insumos)), não à reposição, que só forma o preço. `RateioProducao` continua: guarda a parte de cada gasto mensal, e o frontend mostra os rateios.
 - **Muda (BE-23):** sem o `round2` de hoje; a produção grava os valores exatos e a resposta mostra `custoTotal` e `valorRateado` com 2 casas e `custoUnitario` com 4.
@@ -480,7 +483,7 @@ Exemplo (critério da BE-30): 2 lotes do pão francês (ingredientes de R$ 3,305
 - Efeitos, **numa transação só** no monolito (BE-12): grava a produção e os rateios, dá baixa nos insumos (saldo negativo continua permitido, lacuna 10) e dá entrada de `totalUnidades` no estoque de produto acabado da receita. Hoje são chamadas HTTP e eventos sem compensação.
 - **Muda (BE-12):** a receita e os gastos precisam ser da empresa do token (lacuna 11); a produção grava `totalUnidades` (lacuna 23) e a descrição do gasto em cada rateio.
 - **Muda (BE-12):** id repetido em `gasto_indireto_ids` conta uma vez (`buscarVariosDaEmpresa`); hoje cada repetição soma o rateio de novo.
-- Função pura `calcularProducao({ rendimento, ingredientesLote, usoPorLote? }, lotes, gastos, capacidadeMensal)` em `producoes/domain/producoes.calculos.ts`, com o `calcularGastoNoCusto` da BE-26. Os rateios saem na ordem dos gastos (com o id omitido, a de `GET /gastos-indiretos`: id decrescente).
+- Função pura `calcularProducao({ rendimento, ingredientesLote, usoPorLote?, trabalhoLote? }, lotes, gastos, capacidadeMensal)` (devolve também `custoTrabalho`, BE-47) em `producoes/domain/producoes.calculos.ts`, com o `calcularGastoNoCusto` da BE-26. Os rateios saem na ordem dos gastos (com o id omitido, a de `GET /gastos-indiretos`: id decrescente).
 - Uma falha em qualquer passo (ex.: insumo sem registro de estoque → 404) desfaz tudo: produção, rateios, baixas e entrada de produto acabado.
 
 ### Produção com receita dentro de receita
@@ -551,7 +554,7 @@ status inicial      = PENDENTE
 
 ## Alertas
 
-**Novo (BE-32).** `GET /alertas` junta o que o frontend avisa ao entrar. Só lê; o módulo `alertas` não tem tabela. Funções puras em `alertas/domain/alertas.calculos.ts` (`alertasDeEstoqueNegativo`, `alertasDePrecoDefasado` e, desde a BE-41, `alertasDeProdutoNegativo`), com as regras de `estoque` (`estoqueNegativo`) e de `insumos` (`calcularAumentoReposicao` e `precoDefasado`).
+**Novo (BE-32).** `GET /alertas` junta o que o frontend avisa ao entrar. Só lê; o módulo `alertas` não tem tabela. Funções puras em `alertas/domain/alertas.calculos.ts` (`alertasDeEstoqueNegativo`, `alertasDePrecoDefasado`, desde a BE-41 `alertasDeProdutoNegativo` e desde a BE-47 `valorHoraVazio`), com as regras de `estoque` (`estoqueNegativo`) e de `insumos` (`calcularAumentoReposicao` e `precoDefasado`).
 
 ```
 estoqueNegativo:  saldo < 0
@@ -562,7 +565,8 @@ precoDefasado:    round6(aumento) > 0,10                        // mais de 10%
 - **Estoque negativo**: insumos da empresa com saldo < 0, por nome, com `id`, `nome`, `saldo` e `unidade`. O estoque negativo continua permitido; o alerta só avisa.
 - **Preço defasado**: insumos cuja reposição (`precoMercado ?? ultimoCusto`, [Compras de insumo](#compras-de-insumo)) subiu **mais** de 10% sobre o custo médio, por nome. O estoque foi comprado mais barato do que custa repor: o preço sugerido, que já usa a reposição, subiu, e quem vende pelo preço antigo perde margem. 10% exatos não contam; o aumento é comparado com 6 casas para o erro de ponto flutuante não fazer 10% virar "mais de 10%". Custo médio ≤ 0 não tem base e nunca está defasado. Uma reposição abaixo do médio também não é alerta.
 - Cada insumo defasado traz as receitas que o usam (vazia se nenhuma), com o preço no **Balcão** (`ReceitaService.listarPrecosSugeridos`): `precoSugerido`, o novo, com o custo de reposição (o mesmo de `GET /receitas/:id`), e `precoComCustoMedio`, o mesmo preço com o custo médio dos insumos, para a pessoa ver quanto o preço subiu. Os preços só são calculados quando há insumo defasado. **Muda (BE-40):** uma receita também usa os insumos das receitas usadas dentro dela; as receitas com `vendavel: false` não têm preço e ficam de fora.
-- **Produtos negativos (novo, BE-41)**: receitas com o estoque pronto < 0, por nome, com `receitaId`, `nome`, `saldo` (6 casas) e `unidade` (a `unidadeRendimento` da receita), para o aviso "registre a produção do Brigadeiro branco". Acontece quando a receita é usada dentro de outra sem a produção dela ter sido registrada. Os nomes só são buscados quando há saldo negativo.
+- **Produtos negativos (novo, BE-41)**: receitas com o estoque pronto < 0, por nome, com `receitaId`, `nome`, `saldo` (6 casas) e `unidade` (a `unidadeRendimento` da receita), para o aviso "registre a produção do Brigadeiro branco". Acontece quando a receita é usada dentro de outra sem a produção dela ter sido registrada. Os nomes só são buscados quando há saldo negativo (ou quando o valor da hora é 0, para o alerta abaixo).
+- **Valor da hora vazio (novo, BE-47)**: `valorHoraVazio = valorHora ≤ 0 && alguma receita com minutosTrabalhoPorLote > 0`. A dona informou quanto tempo trabalha no lote, mas não quanto vale a hora dela: até preencher o "valor da sua hora" na configuração de custos, o seu trabalho não entra no custo nem no preço. Com o valor da hora maior que 0, ou sem minutos em nenhuma receita (vendável ou não), é `false`.
 - Arredondamento só na resposta: custos com 6 casas, `aumentoPercentual` (fração) e preços com 4.
 
 ## Lacunas do backend atual
