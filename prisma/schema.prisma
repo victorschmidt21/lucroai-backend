@@ -360,10 +360,12 @@ model Producao {
   quantidade    Int
   /// quantidade * receita.rendimento
   totalUnidades Int      @map("total_unidades")
-  /// Insumos + rateio dos gastos indiretos
+  /// Insumos + rateio dos gastos indiretos + seu trabalho (BE-47)
   custoTotal    Float?   @map("custo_total")
   /// custoTotal / totalUnidades
   custoUnitario Float?   @map("custo_unitario")
+  /// lotes * trabalho de 1 lote na hora da produção (BE-47); null nas antigas
+  custoTrabalho Float?   @map("custo_trabalho")
   dataProducao  DateTime @default(now()) @map("data_producao")
 
   empresa        Empresa                @relation(fields: [empresaId], references: [id])

@@ -55,6 +55,7 @@ describe('calcularProducao (BE-30)', () => {
       // 3,305 × 2 + 2.435 × 2 ÷ 100 = 6,61 + 48,70
       custoTotal: expect.closeTo(55.31, P),
       custoUnitario: expect.closeTo(0.5531, P),
+      custoTrabalho: 0,
       rateios: [
         { gastoIndiretoId: 1, descricao: 'Aluguel', valorRateado: 36 },
         { gastoIndiretoId: 2, descricao: 'Luz', valorRateado: 9 },
@@ -101,6 +102,7 @@ describe('calcularProducao (BE-30)', () => {
       totalUnidades: 150,
       custoTotal: expect.closeTo(9.915, P),
       custoUnitario: expect.closeTo(0.0661, P),
+      custoTrabalho: 0,
       rateios: [],
     });
   });
@@ -114,5 +116,45 @@ describe('calcularProducao (BE-30)', () => {
         CAPACIDADE,
       ),
     ).toMatchObject({ totalUnidades: 0, custoTotal: 20, custoUnitario: 0 });
+  });
+});
+
+describe('calcularProducao com seu trabalho (BE-47)', () => {
+  // 40 min por lote a R$ 18,75 a hora = R$ 12,50 por lote.
+  const paoComTrabalho = { ...pao, trabalhoLote: 12.5 };
+
+  it('2 lotes com R$ 12,50 de trabalho por lote gravam 25 e somam 25 ao custo total', () => {
+    const sem = calcularProducao(pao, 2, [aluguel, luz, gas], CAPACIDADE);
+    const com = calcularProducao(
+      paoComTrabalho,
+      2,
+      [aluguel, luz, gas],
+      CAPACIDADE,
+    );
+    expect(com.custoTrabalho).toBe(25);
+    expect(com.custoTotal).toBeCloseTo(sem.custoTotal + 25, P);
+    // 55,31 + 25 = 80,31 ÷ 100 unidades boas
+    expect(com.custoUnitario).toBeCloseTo(0.8031, P);
+    expect(com.rateios).toEqual(sem.rateios);
+  });
+
+  it('o trabalho das unidades perdidas fica nas boas: o custo é por lote', () => {
+    // Rendimento já é de unidades boas; o trabalho do lote inteiro se divide por elas.
+    const calculo = calcularProducao(
+      { ingredientesLote: 0, rendimento: 8, trabalhoLote: 12.5 },
+      2,
+      [],
+      CAPACIDADE,
+    );
+    expect(calculo).toMatchObject({
+      totalUnidades: 16,
+      custoTotal: 25,
+      custoTrabalho: 25,
+      custoUnitario: 1.5625,
+    });
+  });
+
+  it('sem trabalho informado, custoTrabalho 0 e nada muda', () => {
+    expect(calcularProducao(pao, 3, [], CAPACIDADE).custoTrabalho).toBe(0);
   });
 });
