@@ -101,6 +101,8 @@ export interface ResumoReceita {
   nome: string;
   unidadeRendimento: UnidadeMedida;
   vendavel: boolean;
+  /** Para o alerta `valorHoraVazio` (BE-47). */
+  minutosTrabalhoPorLote: number;
 }
 
 /** O Balcão, cuja taxa é a da maquininha: base do `precoSugerido` (BE-28). */
@@ -317,7 +319,7 @@ export class ReceitaService {
     };
   }
 
-  /** Para o estoque pronto e os alertas (BE-41): sem calcular custo. */
+  /** Para o estoque pronto e os alertas (BE-41, BE-47): sem calcular custo. */
   async listarResumos(empresaId: number): Promise<ResumoReceita[]> {
     const rows = await this.repository.listByEmpresa(empresaId);
     return rows.map((row) => ({
@@ -325,6 +327,7 @@ export class ReceitaService {
       nome: row.nome,
       unidadeRendimento: row.unidadeRendimento,
       vendavel: row.vendavel,
+      minutosTrabalhoPorLote: row.minutosTrabalhoPorLote,
     }));
   }
 

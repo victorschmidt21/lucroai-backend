@@ -75,15 +75,22 @@ export class AlertasDto {
   precoDefasado: AlertaPrecoDefasadoDto[];
   /** Novo (BE-41): receitas com o estoque pronto < 0, por nome. */
   produtosNegativos: AlertaProdutoNegativoDto[];
+  /**
+   * Novo (BE-47): o valor da sua hora é 0 e alguma receita tem minutos de
+   * trabalho; até preencher, seu trabalho não entra no custo. @example false
+   */
+  valorHoraVazio: boolean;
 }
 
 export function toAlertasDto(
   estoqueNegativo: AlertaEstoqueNegativo<UnidadeMedida>[],
   precoDefasado: AlertaPrecoDefasado<UnidadeMedida>[],
   produtosNegativos: AlertaProdutoNegativo<UnidadeMedida>[],
+  valorHoraVazio: boolean,
 ): AlertasDto {
   return {
     estoqueNegativo,
+    valorHoraVazio,
     produtosNegativos: produtosNegativos.map((alerta) => ({
       ...alerta,
       saldo: round6(alerta.saldo),

@@ -5,6 +5,7 @@ import {
   alertasDeProdutoNegativo,
   type InsumoParaAlerta,
   type ReceitaParaAlerta,
+  valorHoraVazio,
 } from './alertas.calculos.js';
 
 function insumo(
@@ -172,5 +173,25 @@ describe('alertasDeProdutoNegativo', () => {
         receitas,
       ),
     ).toEqual([]);
+  });
+});
+
+describe('valorHoraVazio (BE-47)', () => {
+  it('true com valor da hora 0 e uma receita com 30 min', () => {
+    expect(
+      valorHoraVazio(0, [
+        { minutosTrabalhoPorLote: 0 },
+        { minutosTrabalhoPorLote: 30 },
+      ]),
+    ).toBe(true);
+  });
+
+  it('false se nenhuma receita tem minutos', () => {
+    expect(valorHoraVazio(0, [{ minutosTrabalhoPorLote: 0 }])).toBe(false);
+    expect(valorHoraVazio(0, [])).toBe(false);
+  });
+
+  it('false se o valor da hora é maior que 0', () => {
+    expect(valorHoraVazio(18.75, [{ minutosTrabalhoPorLote: 30 }])).toBe(false);
   });
 });
