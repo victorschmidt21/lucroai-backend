@@ -206,7 +206,8 @@ const INSUMOS: {
 
 // Configuração do seed (BE-33): rateio por fornadas, 100 fornadas por mês,
 // lucro padrão de 15%, sem imposto (o DAS do MEI é gasto mensal) e
-// maquininha de 1,36% no balcão.
+// maquininha de 1,36% no balcão. Valor da sua hora de exemplo: R$ 18,75
+// (BE-46), que entra no custo pelos minutos de trabalho de cada receita.
 const CONFIGURACAO = {
   ...CONFIGURACAO_CUSTOS_PADRAO,
   baseRateio: 'FORNADAS',
@@ -214,6 +215,7 @@ const CONFIGURACAO = {
   lucroPadrao: 0.15,
   impostoPercentual: 0,
   taxaMaquininha: 0.0136,
+  valorHora: 18.75,
 } as const;
 
 // Canais padrão (BE-25), com o iFood ativo: a padaria do seed vende por lá,
@@ -249,6 +251,8 @@ const RECEITAS: {
   embalagemPorUnidade: number;
   perdaPercentual: number;
   lucroPercentual: number | null;
+  /** Minutos do seu trabalho em 1 lote (BE-46). */
+  minutosTrabalhoPorLote: number;
   /** `UN` se omitido. */
   unidadeRendimento?: UnidadeMedida;
   /** `true` se omitido (BE-39). */
@@ -265,6 +269,7 @@ const RECEITAS: {
     embalagemPorUnidade: 0,
     perdaPercentual: 0.05,
     lucroPercentual: null,
+    minutosTrabalhoPorLote: 30,
     itens: [
       ['FARINHA', 1],
       ['SAL', 0.02],
@@ -279,6 +284,7 @@ const RECEITAS: {
     embalagemPorUnidade: 0.3,
     perdaPercentual: 0.05,
     lucroPercentual: 0.2,
+    minutosTrabalhoPorLote: 45,
     itens: [
       ['FARINHA', 0.25],
       ['ACUCAR', 0.2],
@@ -297,6 +303,7 @@ const RECEITAS: {
     embalagemPorUnidade: 0.08,
     perdaPercentual: 0.02,
     lucroPercentual: 0.25,
+    minutosTrabalhoPorLote: 60,
     itens: [
       ['CHOC_GOTAS', 0.3],
       ['CREME_LEITE', 100],
@@ -312,6 +319,7 @@ const RECEITAS: {
     embalagemPorUnidade: 0.15,
     perdaPercentual: 0.05,
     lucroPercentual: 0.2,
+    minutosTrabalhoPorLote: 40,
     itens: [
       ['ACUCAR', 0.3],
       ['OVOS', 6],
@@ -322,8 +330,9 @@ const RECEITAS: {
   // Receita dentro de receita (BE-39/BE-40), o pedido da Mah: os brigadeiros
   // rendem 1000 g e só servem para usar dentro de outras (sem preço); o
   // Brownie Dois Amores leva 1 brownie, 150 g de cada brigadeiro e leite
-  // Ninho. Só produção e venda das outras usam `custoDe`, que não soma
-  // receitas usadas.
+  // Ninho. O trabalho de cada brigadeiro (60 min) já vem no custo por grama;
+  // no Dois Amores os 10 min são só os da montagem (BE-46). Só produção e
+  // venda das outras usam `custoDe`, que não soma receitas usadas.
   {
     chave: 'BRIGADEIRO_PRETO',
     nome: 'Brigadeiro preto',
@@ -334,6 +343,7 @@ const RECEITAS: {
     embalagemPorUnidade: 0,
     perdaPercentual: 0,
     lucroPercentual: null,
+    minutosTrabalhoPorLote: 60,
     itens: [
       ['LEITE_CONDENSADO', 790],
       ['CREME_LEITE', 200],
@@ -351,6 +361,7 @@ const RECEITAS: {
     embalagemPorUnidade: 0,
     perdaPercentual: 0,
     lucroPercentual: null,
+    minutosTrabalhoPorLote: 60,
     itens: [
       ['LEITE_CONDENSADO', 790],
       ['CREME_LEITE', 200],
@@ -366,6 +377,7 @@ const RECEITAS: {
     embalagemPorUnidade: 0,
     perdaPercentual: 0.05,
     lucroPercentual: null,
+    minutosTrabalhoPorLote: 40,
     itens: [
       ['FARINHA', 0.2],
       ['ACUCAR', 0.3],
@@ -383,6 +395,7 @@ const RECEITAS: {
     embalagemPorUnidade: 1.5,
     perdaPercentual: 0,
     lucroPercentual: 0.25,
+    minutosTrabalhoPorLote: 10,
     itens: [['LEITE_NINHO', 30]],
     receitas: [
       ['BROWNIE', 1],
@@ -711,6 +724,7 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
         embalagemPorUnidade: def.embalagemPorUnidade,
         perdaPercentual: def.perdaPercentual,
         lucroPercentual: def.lucroPercentual,
+        minutosTrabalhoPorLote: def.minutosTrabalhoPorLote,
         dataCriacao: diasAtras(179),
         itens: {
           create: def.itens.map(([chave, quantidade]) => ({
@@ -744,6 +758,8 @@ async function semear(tx: Tx, senhaHash: string): Promise<number> {
       usoPorLote: def.usoPorLote,
       embalagemPorUnidade: def.embalagemPorUnidade,
       perdaPercentual: def.perdaPercentual,
+      minutosTrabalhoPorLote: def.minutosTrabalhoPorLote,
+      valorHora: CONFIGURACAO.valorHora,
       gastos,
       capacidadeMensal: CONFIGURACAO.capacidadeMensal,
     });
