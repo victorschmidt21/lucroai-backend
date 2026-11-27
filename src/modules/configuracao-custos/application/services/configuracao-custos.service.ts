@@ -32,6 +32,7 @@ export class ConfiguracaoCustosService {
       lucroPadrao: dto.lucroPadrao ?? atual.lucroPadrao,
       impostoPercentual: dto.impostoPercentual ?? atual.impostoPercentual,
       taxaMaquininha: dto.taxaMaquininha ?? atual.taxaMaquininha,
+      valorHora: dto.valorHora ?? atual.valorHora,
     };
     validarConfiguracaoCustos(config);
     return toConfiguracaoCustosDto(

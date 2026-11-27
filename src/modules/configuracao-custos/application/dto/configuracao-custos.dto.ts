@@ -16,6 +16,8 @@ export class ConfiguracaoCustosDto {
   impostoPercentual: number;
   /** @example 0 */
   taxaMaquininha: number;
+  /** Reais por hora de trabalho da dona (BE-45). @example 0 */
+  valorHora: number;
 }
 
 // Sem arredondamento: são os valores que a pessoa digitou, e as frações
@@ -30,5 +32,6 @@ export function toConfiguracaoCustosDto(
     lucroPadrao: row.lucroPadrao,
     impostoPercentual: row.impostoPercentual,
     taxaMaquininha: row.taxaMaquininha,
+    valorHora: row.valorHora,
   };
 }

@@ -3,7 +3,7 @@ import { BaseRateio } from '../../../../generated/prisma/client.js';
 
 /**
  * Corpo de `PUT /configuracao-custos`: campo omitido mantém o valor salvo.
- * Os limites (capacidade > 0 e frações entre 0 e 1) ficam em
+ * Os limites (capacidade > 0, frações entre 0 e 1 e valor da hora ≥ 0) ficam em
  * `validarConfiguracaoCustos`, conferidos depois de mesclar com o salvo.
  */
 export class UpdateConfiguracaoCustosDto {
@@ -31,4 +31,9 @@ export class UpdateConfiguracaoCustosDto {
   @IsOptional()
   @IsNumber({ allowNaN: false, allowInfinity: false })
   taxaMaquininha?: number;
+
+  /** Reais por hora de trabalho da dona (BE-45), ≥ 0. @example 18.75 */
+  @IsOptional()
+  @IsNumber({ allowNaN: false, allowInfinity: false })
+  valorHora?: number;
 }

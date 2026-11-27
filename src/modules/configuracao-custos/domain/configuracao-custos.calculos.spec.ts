@@ -17,13 +17,14 @@ function erroDe(config: ConfiguracaoCustosValores): InvalidInputError {
 }
 
 describe('CONFIGURACAO_CUSTOS_PADRAO', () => {
-  it('tem os padrões da BE-24 e é válida', () => {
+  it('tem os padrões da BE-24 (e o valor da hora 0 da BE-45) e é válida', () => {
     expect(CONFIGURACAO_CUSTOS_PADRAO).toEqual({
       baseRateio: 'FORNADAS',
       capacidadeMensal: 40,
       lucroPadrao: 0.15,
       impostoPercentual: 0,
       taxaMaquininha: 0,
+      valorHora: 0,
     });
     expect(() =>
       validarConfiguracaoCustos(CONFIGURACAO_CUSTOS_PADRAO),
@@ -42,9 +43,25 @@ describe('validarConfiguracaoCustos', () => {
         lucroPadrao: 1,
         impostoPercentual: 0,
         taxaMaquininha: 1,
+        valorHora: 0,
       }),
     ).not.toThrow();
   });
+
+  it('aceita valor da hora 0 ou positivo, mesmo fracionário', () => {
+    expect(() =>
+      validarConfiguracaoCustos({ ...base, valorHora: 18.75 }),
+    ).not.toThrow();
+  });
+
+  it.each([-1, -0.01, Number.NaN, Number.POSITIVE_INFINITY])(
+    'recusa valorHora %s',
+    (valorHora) => {
+      expect(erroDe({ ...base, valorHora }).details).toEqual([
+        { field: 'valorHora', messages: ['valorHora não pode ser negativo'] },
+      ]);
+    },
+  );
 
   it.each([0, -1, Number.NaN])('recusa capacidadeMensal %s', (capacidade) => {
     const erro = erroDe({ ...base, capacidadeMensal: capacidade });
