@@ -134,6 +134,8 @@ const receitaComReceitasSchema = receitaNovaSchema.extend({
 
 /** Receitas usadas que saíram do estoque pronto na produção (BE-41). */
 const producaoNovaSchema = producaoSchema.extend({
+  /** Seu trabalho na produção (BE-47); null nas anteriores. */
+  custoTrabalho: z.number().nullable(),
   receitasUsadas: z.array(
     z.object({
       receitaId: z.number().int(),
@@ -265,6 +267,8 @@ const alertasSchema = z.object({
       unidade: z.string(),
     }),
   ),
+  // Minutos de trabalho sem o valor da hora (BE-47).
+  valorHoraVazio: z.boolean(),
 });
 
 const healthSchema = z.object({
@@ -1080,6 +1084,8 @@ describe('Contrato com o frontend (e2e)', () => {
         estoqueNegativo: [],
         precoDefasado: [],
         produtosNegativos: [],
+        // A receita da seção 2 tem 80 min e o valor da hora ainda é 0.
+        valorHoraVazio: true,
       });
 
       // Farinha a R$ 4/kg com 1 kg; o pão usa 2 kg por lote.
@@ -1606,6 +1612,83 @@ describe('Contrato com o frontend (e2e)', () => {
       expect(validar(erroSchema, recusada.body).code).toBe(
         'ESTOQUE_INSUFICIENTE',
       );
+    });
+  });
+
+  describe('9. seu trabalho na produção (BE-47)', () => {
+    // Na empresa B, para não mexer no custo das receitas da A.
+    it('a produção grava o custo do trabalho e o alerta avisa o valor da hora vazio', async () => {
+      const alertaB = async () =>
+        validar(alertasSchema, (await comB('get', '/alertas').expect(200)).body)
+          .valorHoraVazio;
+      // B ainda não tem receita com minutos.
+      expect(await alertaB()).toBe(false);
+
+      const insumo = await comB('post', '/insumos')
+        .send({
+          nome: 'Açúcar B',
+          quantidadeBaseCusto: 1,
+          unidade: 'KG',
+          valorPago: 4,
+          quantidadeDisponivelInicial: 10,
+        })
+        .expect(201);
+      const receita = await comB('post', '/receitas')
+        .send({
+          nome: 'Bolo B',
+          rendimento: 10,
+          unidadeRendimento: 'UN',
+          minutos_trabalho_por_lote: 40,
+          insumos: [
+            { insumo_id: validar(insumoSchema, insumo.body).id, quantidade: 1 },
+          ],
+        })
+        .expect(201);
+      const boloId = validar(receitaSchema, receita.body).id;
+      // Valor da hora 0 e uma receita com minutos.
+      expect(await alertaB()).toBe(true);
+
+      // 40 min a R$ 18,75 = R$ 12,50 por lote; 2 lotes = R$ 25.
+      await comB('put', '/configuracao-custos')
+        .send({ valorHora: 18.75 })
+        .expect(200);
+      expect(await alertaB()).toBe(false);
+      const criada = await comB('post', '/producoes')
+        .send({ receita_id: boloId, quantidade: 2, gasto_indireto_ids: [] })
+        .expect(201);
+      const producao = validar(producaoNovaSchema, criada.body);
+      validar(producaoSchema, criada.body);
+      // Ingredientes de 2 lotes (R$ 4 cada) + R$ 25 de trabalho.
+      expect(producao).toMatchObject({
+        custoTrabalho: 25,
+        custoTotal: 33,
+        custoUnitario: 1.65,
+        totalUnidades: 20,
+      });
+
+      // Mudar o valor da hora depois não muda a produção gravada.
+      await comB('put', '/configuracao-custos')
+        .send({ valorHora: 30 })
+        .expect(200);
+      const lida = await comB('get', `/producoes/${producao.id}`).expect(200);
+      expect(validar(producaoNovaSchema, lida.body)).toMatchObject({
+        custoTrabalho: 25,
+        custoTotal: 33,
+      });
+      const lista = await comB('get', `/producoes?receitaId=${boloId}`).expect(
+        200,
+      );
+      expect(lista.body).toMatchObject([{ custoTrabalho: 25 }]);
+
+      // Sem minutos em nenhuma receita, nada a avisar mesmo com hora 0.
+      await comB('put', '/configuracao-custos')
+        .send({ valorHora: 0 })
+        .expect(200);
+      expect(await alertaB()).toBe(true);
+      await comB('put', `/receitas/${boloId}`)
+        .send({ minutos_trabalho_por_lote: 0 })
+        .expect(200);
+      expect(await alertaB()).toBe(false);
     });
   });
 
