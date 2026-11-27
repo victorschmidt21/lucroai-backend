@@ -77,8 +77,12 @@ const receitaNovaSchema = receitaSchema.extend({
   custo: z.object({
     ingredientesLote: z.number(),
     gastosMensaisLote: z.number(),
+    /** BE-46. */
+    trabalhoLote: z.number(),
     ingredientes: z.number(),
     gastosMensais: z.number(),
+    /** BE-46. */
+    trabalho: z.number(),
     gastosPorUnidade: z.number(),
     embalagem: z.number(),
     perdas: z.number(),
@@ -96,6 +100,8 @@ const receitaNovaSchema = receitaSchema.extend({
         .object({
           ingredientes: parteSchema,
           gastosMensais: parteSchema,
+          /** BE-46. */
+          trabalho: parteSchema,
           gastosPorUnidade: parteSchema,
           embalagem: parteSchema,
           perdas: parteSchema,
