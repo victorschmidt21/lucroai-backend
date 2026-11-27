@@ -124,7 +124,7 @@ custoMedio  = saldo ≤ 0 ? custoCompra
 - A configuração nasce no cadastro da empresa (`ConfiguracaoCustosService.criarPadrao(empresaId, tx)`, chamado pelo `auth` na transação do cadastro), no seed (que grava a da padaria de demonstração: 100 fornadas e maquininha de 1,36%, BE-33) e, para as empresas que já existiam, na própria migration `criar_configuracao_custos`.
 - Validação (`validarConfiguracaoCustos`), feita depois de mesclar o `PUT` com os valores salvos: `capacidadeMensal > 0`; `lucroPadrao`, `impostoPercentual` e `taxaMaquininha` entre 0 e 1, inclusive; `valorHora` finito e ≥ 0 (BE-45). Erro → 400 `DADOS_INVALIDOS`, um `details` por campo, no formato do `ValidationPipe`.
 - Os valores são gravados e devolvidos como vieram, sem arredondar.
-- Sem regime tributário, anexo do Simples nem faturamento: decisão de simplicidade da BE-24. **Muda (BE-45):** o "sem pró-labore" da BE-24 é revisto só no trabalho da dona: o `valorHora` (padrão 0, então nada muda até ela preencher) vezes os `minutosTrabalhoPorLote` da [ficha técnica](#ficha-técnica) vira custo, não lucro (o `lucroPadrao` continua 15%). A BE-45 só cadastra os dois campos; o cálculo no custo é a BE-46. Lançar o trabalho como gasto mensal está errado: o gasto mensal é dividido pelas fornadas, e um lote de brigadeiro sem forno pagaria o mesmo que um bolo de 3 h. Na interface é "seu trabalho" e "valor da sua hora". `capacidadeMensal` divide os gastos `MENSAL`; `lucroPadrao`, `impostoPercentual` e `taxaMaquininha` entram no [preço por canal](#preço-por-canal) (BE-28).
+- Sem regime tributário, anexo do Simples nem faturamento: decisão de simplicidade da BE-24. **Muda (BE-45):** o "sem pró-labore" da BE-24 é revisto só no trabalho da dona: o `valorHora` (padrão 0, então nada muda até ela preencher) vezes os `minutosTrabalhoPorLote` da [ficha técnica](#ficha-técnica) vira custo, não lucro (o `lucroPadrao` continua 15%). A BE-45 cadastra os dois campos; a BE-46 os soma ao custo ([Seu trabalho no custo](#seu-trabalho-no-custo)). Lançar o trabalho como gasto mensal está errado: o gasto mensal é dividido pelas fornadas, e um lote de brigadeiro sem forno pagaria o mesmo que um bolo de 3 h. Na interface é "seu trabalho" e "valor da sua hora". `capacidadeMensal` divide os gastos `MENSAL`; `lucroPadrao`, `impostoPercentual` e `taxaMaquininha` entram no [preço por canal](#preço-por-canal) (BE-28).
 - A soma lucro + imposto + maquininha (+ comissão e gastos `PERCENTUAL_VENDA`) ≥ 1 **não** é barrada no `PUT`: cada canal com percentuais ≥ 100% vem sem preço e com o motivo `PERCENTUAIS_ACIMA_DE_100` (BE-28).
 
 ## Canais de venda
@@ -212,7 +212,8 @@ Origem: `recipe-service/src/modules/custos/application/services/custo.service.ts
 ```
 ingredientesLote  = Σ item.quantidade × insumo.custoReposicao           // BE-29: precoMercado ?? ultimoCusto
 gastosMensaisLote = Σ gastos MENSAL × usoPorLote ÷ capacidadeMensal
-custoUnitario     = ((ingredientesLote + gastosMensaisLote) ÷ rendimento
+trabalhoLote      = minutosTrabalhoPorLote ÷ 60 × valorHora             // BE-46
+custoUnitario     = ((ingredientesLote + gastosMensaisLote + trabalhoLote) ÷ rendimento
                      + embalagemPorUnidade + Σ gastos POR_UNIDADE) ÷ (1 − perdaPercentual)   // rendimento ≤ 0 → 400
 ```
 
@@ -231,9 +232,26 @@ Sem embalagem nem perda, os números são os mesmos da BE-27 (o custo invisível
 
 Exemplo (critério da BE-28): pão francês com ingredientes de R$ 3,305, rendimento 50, gastos mensais de R$ 2.435, capacidade de 100 fornadas, uso de 1 fornada e perda de 5%: `(3,305 + 24,35) ÷ 50 ÷ 0,95` = **R$ 0,5822** por unidade.
 
-Detalhamento na resposta da receita (`custo`): `ingredientesLote` e `gastosMensaisLote` (2 casas) e, por unidade (4 casas), `ingredientes` (`ingredientesLote ÷ rendimento`), `gastosMensais` (`gastosMensaisLote ÷ rendimento`), `gastosPorUnidade`, `embalagem`, `perdas` (`custoUnitario − custo sem perda`) e `unitario`; as partes por unidade somam o `unitario`.
+Detalhamento na resposta da receita (`custo`): `ingredientesLote`, `gastosMensaisLote` e `trabalhoLote` (BE-46) com 2 casas e, por unidade (4 casas), `ingredientes` (`ingredientesLote ÷ rendimento`), `gastosMensais` (`gastosMensaisLote ÷ rendimento`), `trabalho` (`trabalhoLote ÷ rendimento`, BE-46), `gastosPorUnidade`, `embalagem`, `perdas` (`custoUnitario − custo sem perda`) e `unitario`; as partes por unidade somam o `unitario`.
 
 **Muda (BE-23):** hoje cada linha arredonda com `round2`; o monolito não arredonda no meio. A resposta arredonda (`custoCalculado`, `custoProducao` e `custo_invisivel` com 2 casas; `custoUnitario` e `precoSugerido` com 4), ver [Arredondamento](#arredondamento).
+
+#### Seu trabalho no custo
+
+**Novo (BE-46).** O trabalho da dona entra no custo de cada receita pelo tempo que ela fica ocupada com o lote, e não como gasto do mês (que seria dividido pelas fornadas):
+
+```text
+trabalhoLote = minutosTrabalhoPorLote ÷ 60 × valorHora    // calcularTrabalhoLote, sem arredondar
+trabalho     = trabalhoLote ÷ rendimento                   // por unidade, antes da perda
+```
+
+- Soma junto de ingredientes, gastos mensais, embalagem e gastos por unidade, **antes** da perda: a unidade perdida também levou trabalho. O que a perda acrescenta sobre o trabalho vai para `perdas`, como nas outras partes.
+- Entra no custo variável (`custoSemGastosMensais`): não depende da capacidade do mês.
+- O `valorHora` é o atual da configuração de custos: mudá-lo muda custo e preço na próxima leitura (nada é gravado). Com `valorHora` 0 (o padrão) ou minutos 0, custo e preço ficam iguais aos de antes.
+- O lucro padrão continua 15% sobre o preço: o trabalho é custo, não lucro.
+- Preço por canal, composição (parte `trabalho`), simulação, ponto de equilíbrio, preço de venda e alerta de preço defasado seguem o custo novo sem mudança de fórmula. `buscarDaEmpresa` (produção e venda) também: a venda copia o `custoUnitario` com o trabalho. A produção soma o trabalho das receitas usadas pelo `custoParaUso` ([Custo com receita dentro de receita](#custo-com-receita-dentro-de-receita)); o trabalho da própria receita na produção é a BE-47.
+
+Exemplo (critério da BE-46): com o valor da hora de R$ 18,75, um lote de 40 min rende `40 ÷ 60 × 18,75` = R$ 12,50 de trabalho; se rende 50 unidades, soma **R$ 0,25** por unidade. Com perda de 10%, soma `0,25 ÷ 0,9` = **R$ 0,2778** ao custo unitário (R$ 0,25 em `trabalho` e R$ 0,0278 em `perdas`). Sem imposto, taxa nem gastos de venda, o preço sobe `0,25 ÷ 0,85` = R$ 0,2941 com o lucro de 15%.
 
 - **Custo invisível (lacuna 18):** soma **todos** os gastos indiretos da empresa. **Muda (BE-26):** cada gasto entra pelo [tipo](#gastos-indiretos-e-rateio): o mensal dividido pela capacidade mensal e multiplicado pelo `usoPorLote` (BE-27), o por unidade multiplicado pelas unidades e o percentual de venda fora do custo (entra no preço, BE-28). Antes, o Aluguel de R$ 1.800 `FIXO` subia R$ 1.800 o custo de cada receita; agora sobe R$ 45 com a capacidade padrão de 40.
 - O resultado do custo invisível precisa ser finito e ≥ 0, senão 400 (`obterCustoInvisivel`). Com valores ≥ 0 validados no cadastro, isso não acontece, e o monolito não repete a conferência.
@@ -262,7 +280,7 @@ Detalhamento na resposta da receita (`custo`): `ingredientesLote` e `gastosMensa
 - Perda ou lucro ≥ 1 não deixam preço possível (divisão por zero) → 400 `DADOS_INVALIDOS`, com `details` no campo do corpo (`perda_percentual`, `lucro_percentual`). O DTO confere o tipo e o mínimo; o limite superior, e o `PUT` mesclado com o salvo, são conferidos por `validarFichaTecnica`.
 - Na resposta, `lucroPercentual` é omitido quando a receita usa o lucro padrão (como os outros campos sem valor da receita) e sai com 4 casas.
 - **Compatibilidade com o frontend atual:** o formulário ainda envia `margem_lucro` (markup). Ela é aceita e convertida em `lucro_percentual = margem ÷ (1 + margem)`, o que dá o mesmo preço sugerido (`custo × (1 + margem) = custo ÷ (1 − lucro)`); se vierem os dois, vale o `lucro_percentual`. `margem_lucro: null` volta ao lucro padrão. O legado continua enquanto o frontend atual o exigir ([api.md](api.md#campos-legados-mantidos)).
-- `minutosTrabalhoPorLote` (BE-45) só é gravado e devolvido como veio; entra no custo na BE-46. A migration `adiciona_valor_hora_e_minutos_trabalho` deixa as receitas e configurações existentes com 0, sem mudar o custo delas. Negativo → 400 `DADOS_INVALIDOS` com `details` em `minutos_trabalho_por_lote`.
+- `minutosTrabalhoPorLote` (BE-45) é gravado e devolvido como veio; desde a BE-46 entra no custo ([Seu trabalho no custo](#seu-trabalho-no-custo)). A migration `adiciona_valor_hora_e_minutos_trabalho` deixa as receitas e configurações existentes com 0, sem mudar o custo delas. Negativo → 400 `DADOS_INVALIDOS` com `details` em `minutos_trabalho_por_lote`.
 - Funções puras: `FICHA_TECNICA_PADRAO`, `resolverFichaTecnica(informada, salva?)` (omitido ou `null` mantém o salvo, menos `lucroPercentual`, em que `null` volta ao padrão), `validarFichaTecnica`, `lucroDaMargem`, `margemDoLucro` e `lucroPercentualInformado`.
 
 ### Edição
@@ -296,11 +314,13 @@ Origem: `recipe-service/src/modules/receitas/application/services/receita.servic
 
 #### Custo com receita dentro de receita
 
-**Novo (BE-40).** O custo de 1 unidade (grama, ml ou unidade do rendimento) da receita usada é só ingredientes, forno e perda:
+**Novo (BE-40).** O custo de 1 unidade (grama, ml ou unidade do rendimento) da receita usada é só ingredientes, forno, seu trabalho (**muda, BE-46**) e perda:
 
 ```text
-custoParaUso = (ingredientesLote + gastosMensaisLote) ÷ rendimento ÷ (1 − perdaPercentual)
+custoParaUso = (ingredientesLote + gastosMensaisLote + trabalhoLote) ÷ rendimento ÷ (1 − perdaPercentual)
 ```
+
+- **Muda (BE-46):** o `trabalhoLote` é o da receita usada (os minutos dela × o valor da hora). Na receita que usa, os `minutosTrabalhoPorLote` são só os da montagem: o trabalho do brigadeiro já vem no custo por grama.
 
 - **Sem** embalagem e **sem** gastos `POR_UNIDADE` da receita usada: esses entram uma vez só, no produto final.
 - `gastosMensaisLote` é o da receita usada (o `usoPorLote` dela, `somarGastosMensaisLote`).
@@ -313,6 +333,8 @@ custoParaUso = (ingredientesLote + gastosMensaisLote) ÷ rendimento ÷ (1 − pe
 - Funções puras: `calcularCustoParaUsoEmReceita` e o campo `receitas` de `calcularCustoReceita` (sem arredondar, BE-23).
 
 Exemplo: o brigadeiro tem R$ 30,00 de ingredientes e R$ 5,00 de forno por lote (R$ 500 de gastos mensais, capacidade de 100 fornadas, 1 fornada), rende 1000 g e não tem perda: `(30 + 5) ÷ 1000 ÷ 1 = R$ 0,035/g`. A embalagem dele não entra. Os 150 g dentro do Brownie Dois Amores somam `150 × 0,035 = R$ 5,25` aos ingredientes do lote do Dois Amores. Se o chocolate do brigadeiro subir R$ 10,00 por lote, o grama vai a R$ 0,045 e os 150 g a R$ 6,75.
+
+Exemplo do trabalho (critério da BE-46): o brigadeiro de 1000 g leva 60 min; com o valor da hora de R$ 18,75, são R$ 18,75 por lote, **R$ 0,01875/g** a mais. Os 150 g dentro do Brownie Dois Amores somam `150 × 0,01875` = **R$ 2,81** ao custo dele; os 10 min de montagem do Dois Amores (R$ 3,125 por lote) somam à parte, no `trabalho` dele.
 
 ### Custo para N lotes
 
@@ -354,7 +376,7 @@ pontoEquilibrio       = MCu ≤ 0 ? { unidades: null, motivo: MARGEM_NEGATIVA }
                                 : { unidades: ceil(round6(gastosMensais ÷ MCu)), motivo: null }   // calcularPontoEquilibrioProduto
 ```
 
-- `custoSemGastosMensais` é o custo variável da unidade: `(ingredientes + embalagem + gastosPorUnidade) ÷ (1 − perda)`, o `custoUnitario` sem a parte dos gastos `MENSAL` (`calcularCustoUnitario` devolve os dois). A margem de contribuição é o que cada unidade deixa para pagar os gastos do mês.
+- `custoSemGastosMensais` é o custo variável da unidade: `(ingredientes + trabalho + embalagem + gastosPorUnidade) ÷ (1 − perda)` (o `trabalho` desde a BE-46), o `custoUnitario` sem a parte dos gastos `MENSAL` (`calcularCustoUnitario` devolve os dois). A margem de contribuição é o que cada unidade deixa para pagar os gastos do mês.
 - **Ponto de equilíbrio do produto**: unidades por mês para pagar **todos** os gastos mensais "se só vendesse este produto", arredondado para cima (o `round6` tira o ruído do ponto flutuante antes do teto). `MCu ≤ 0` (comparado com `round6`) → `unidades: null` com motivo `MARGEM_NEGATIVA`: nenhuma quantidade paga os gastos. Sem gastos mensais, 0.
 - O lucro real está na mesma base do lucro do preço: **pelo preço sugerido do canal, o `lucroReal` é o lucro configurado** (critério da BE-31). Exemplo: o pão francês da BE-28 no Balcão, a R$ 0,6961 (maquininha de 1,36%), tem lucro real de 15%, custo variável de `3,305 ÷ 50 ÷ 0,95` = R$ 0,0696, MCu de `0,6961 × 0,9864 − 0,0696` ≈ R$ 0,617 e ponto de equilíbrio de `2.435 ÷ 0,617` = **3.947 pães por mês**.
 - `novoCusto` troca o custo unitário; o custo variável perde a mesma parte dos gastos mensais que a receita tem (nunca fica abaixo de 0).
@@ -394,7 +416,7 @@ preco       = custoUnitario ÷ (1 − percentuais)
 
 - `percentuais ≥ 1` (comparado com `round6`, para o ruído do ponto flutuante não decidir) → sem preço possível: `preco: null`, `motivo: "PERCENTUAIS_ACIMA_DE_100"` e `composicao: null`. A configuração e os canais não barram a soma; o aviso aparece no canal.
 - `precos` da receita: um por canal **ativo**, em ordem de criação. `precoSugerido` é sempre o preço do Balcão (taxa da maquininha), mesmo com o canal Balcão desativado, porque é o preço de referência; a simulação o usa como padrão.
-- Composição ("para onde vai cada R$ 1"), cada parte com `valor` (reais por unidade) e `fracao` (do preço): `ingredientes`, `gastosMensais`, `gastosPorUnidade`, `embalagem` e `perdas` (as partes do custo; `fracao = valor ÷ preço`, 0 com preço 0) e `imposto`, `taxaCanal`, `gastosPercentuais` e `lucro` (`valor = fracao × preço`). As partes somam o preço e as frações somam 1. O frontend agrupa como quiser (ex.: embalagem e perdas juntas).
+- Composição ("para onde vai cada R$ 1"), cada parte com `valor` (reais por unidade) e `fracao` (do preço): `ingredientes`, `gastosMensais`, `trabalho` (**novo**, BE-46), `gastosPorUnidade`, `embalagem` e `perdas` (as partes do custo; `fracao = valor ÷ preço`, 0 com preço 0) e `imposto`, `taxaCanal`, `gastosPercentuais` e `lucro` (`valor = fracao × preço`). As partes somam o preço e as frações somam 1. O frontend agrupa como quiser (ex.: embalagem e perdas juntas).
 - Exemplo (critério da BE-28): o pão francês de R$ 0,5822, com imposto 0, maquininha 1,36% e lucro 15%, custa **R$ 0,6961** no Balcão (`0,5822 ÷ 0,8364`); no iFood (15,2%), R$ 0,8341.
 - `calcularPercentuaisSemLucro(canal, { impostoPercentual, taxaMaquininha, gastosPercentuais })` (BE-30): imposto + taxa do canal + gastos `PERCENTUAL_VENDA`, os percentuais sem o lucro, que a [venda](#vendas) desconta no lucro real.
 - Funções puras: `calcularPreco(custoDetalhado, { imposto, taxaCanal, gastosPercentuais, lucro })`, `calcularPrecoNoCanal(custoDetalhado, canal, { impostoPercentual, taxaMaquininha, gastosPercentuais, lucro })` e `taxaDoCanal` (de `canais`). Sem arredondar (BE-23): o `ReceitaDto` arredonda `preco` e `valor` com 4 casas, e `percentuais` e `fracao` com 4.
@@ -475,7 +497,7 @@ para cada receita usada:
 - Grava uma movimentação `SAIDA` / origem `PRODUCAO` por receita usada, com `referenciaId` = id da produção (`EstoqueProdutoAcabadoService.saidaPorProducao`, com a linha travada e o saldo criado zerado se ainda não existir).
 - O saldo pronto da receita usada **pode ficar negativo**, a mesma decisão do estoque de insumos (lacuna 10): sem brigadeiro branco pronto, 2 lotes do Brownie Dois Amores (150 g por lote) deixam o saldo dele em −300 g, e `GET /alertas` o lista em `produtosNegativos`. A **venda continua** exigindo saldo: concluir sem saldo → 422 `ESTOQUE_INSUFICIENTE`.
 - **Custo:** o `ingredientesLote` ao custo médio (BE-30) já inclui as receitas usadas (BE-40). A produção **não rateia de novo o forno** das receitas usadas: o forno delas foi cobrado quando elas foram produzidas, e só o `usoPorLote` da receita produzida gera rateio.
-- O custo das receitas usadas é **calculado na hora** (`custoParaUso`: ingredientes ao custo médio + forno + perda), **não copiado** da produção que as gerou. Se o insumo do brigadeiro mudou de custo médio entre a produção dele e a do Brownie Dois Amores, vale o custo médio atual.
+- O custo das receitas usadas é **calculado na hora** (`custoParaUso`: ingredientes ao custo médio + forno + trabalho, desde a BE-46, + perda), **não copiado** da produção que as gerou. Se o insumo do brigadeiro mudou de custo médio entre a produção dele e a do Brownie Dois Amores, vale o custo médio atual.
 - A produção guarda o que saiu em `receita_usada_producao` (`ReceitaUsadaProducao`: `receitaId` sem FK, `nome` e `unidade` copiados na hora, `quantidade` = por lote × lotes) e devolve `receitasUsadas: [{ receitaId, nome, quantidade, unidade }]` (`[]` na receita só com insumos).
 - Receita só com insumos: nada muda.
 
