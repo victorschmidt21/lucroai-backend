@@ -139,6 +139,8 @@ export class ReceitaDto {
   usoPorLote: number;
   /** Reais por unidade. @example 0 */
   embalagemPorUnidade: number;
+  /** Minutos de trabalho de 1 lote, sem o tempo sozinha no forno (BE-45). @example 0 */
+  minutosTrabalhoPorLote: number;
   /** Fração das unidades que não são vendidas. @example 0 */
   perdaPercentual: number;
   /** Fração do preço, com 4 casas; omitido quando a receita usa o lucro padrão da empresa. @example 0.15 */
@@ -213,6 +215,7 @@ export function toReceitaDto(
     precoSugerido: arredondarOpcional(precoSugerido, round4),
     usoPorLote: row.usoPorLote,
     embalagemPorUnidade: row.embalagemPorUnidade,
+    minutosTrabalhoPorLote: row.minutosTrabalhoPorLote,
     perdaPercentual: row.perdaPercentual,
     lucroPercentual: arredondarOpcional(row.lucroPercentual, round4),
     vendavel: row.vendavel,

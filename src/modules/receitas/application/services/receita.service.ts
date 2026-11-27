@@ -397,6 +397,7 @@ export class ReceitaService {
       embalagemPorUnidade: dto.embalagem_por_unidade,
       perdaPercentual: dto.perda_percentual,
       lucroPercentual: lucroPercentualInformado(dto),
+      minutosTrabalhoPorLote: dto.minutos_trabalho_por_lote,
     };
   }
 

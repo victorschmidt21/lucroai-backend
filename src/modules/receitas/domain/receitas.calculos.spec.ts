@@ -803,6 +803,7 @@ describe('resolverFichaTecnica', () => {
       embalagemPorUnidade: 0,
       perdaPercentual: 0,
       lucroPercentual: null,
+      minutosTrabalhoPorLote: 0,
     });
     expect(
       resolverFichaTecnica({
@@ -810,6 +811,7 @@ describe('resolverFichaTecnica', () => {
         embalagemPorUnidade: null,
         perdaPercentual: null,
         lucroPercentual: null,
+        minutosTrabalhoPorLote: null,
       }),
     ).toEqual(FICHA_TECNICA_PADRAO);
   });
@@ -820,11 +822,29 @@ describe('resolverFichaTecnica', () => {
       embalagemPorUnidade: 0.3,
       perdaPercentual: 0.05,
       lucroPercentual: 0.2,
+      minutosTrabalhoPorLote: 40,
     };
     expect(resolverFichaTecnica({ usoPorLote: 3 }, salva)).toEqual({
       ...salva,
       usoPorLote: 3,
     });
+  });
+
+  it('minutosTrabalhoPorLote informado substitui (até 0); omitido ou null mantém', () => {
+    const salva = { ...FICHA_TECNICA_PADRAO, minutosTrabalhoPorLote: 40 };
+    expect(
+      resolverFichaTecnica({ minutosTrabalhoPorLote: 80 }, salva)
+        .minutosTrabalhoPorLote,
+    ).toBe(80);
+    expect(
+      resolverFichaTecnica({ minutosTrabalhoPorLote: 0 }, salva)
+        .minutosTrabalhoPorLote,
+    ).toBe(0);
+    expect(resolverFichaTecnica({}, salva).minutosTrabalhoPorLote).toBe(40);
+    expect(
+      resolverFichaTecnica({ minutosTrabalhoPorLote: null }, salva)
+        .minutosTrabalhoPorLote,
+    ).toBe(40);
   });
 
   it('lucroPercentual null volta ao lucro padrão; os outros null mantêm', () => {
@@ -833,6 +853,7 @@ describe('resolverFichaTecnica', () => {
       embalagemPorUnidade: 0.3,
       perdaPercentual: 0.05,
       lucroPercentual: 0.2,
+      minutosTrabalhoPorLote: 40,
     };
     expect(
       resolverFichaTecnica(
@@ -849,6 +870,7 @@ describe('validarFichaTecnica', () => {
     embalagemPorUnidade: 0,
     perdaPercentual: 0,
     lucroPercentual: null,
+    minutosTrabalhoPorLote: 0,
   };
 
   it('aceita os padrões e os limites válidos', () => {
@@ -859,9 +881,29 @@ describe('validarFichaTecnica', () => {
         embalagemPorUnidade: 0.15,
         perdaPercentual: 0.999,
         lucroPercentual: 0,
+        minutosTrabalhoPorLote: 80.5,
       }),
     ).not.toThrow();
   });
+
+  it.each([-5, -0.01, Number.NaN, Number.POSITIVE_INFINITY])(
+    'minutosTrabalhoPorLote %d → 400 DADOS_INVALIDOS em minutos_trabalho_por_lote',
+    (minutosTrabalhoPorLote) => {
+      expect(() =>
+        validarFichaTecnica({ ...valida, minutosTrabalhoPorLote }),
+      ).toThrow(
+        expect.objectContaining({
+          code: 'DADOS_INVALIDOS',
+          details: [
+            {
+              field: 'minutos_trabalho_por_lote',
+              messages: ['minutos_trabalho_por_lote não pode ser negativo'],
+            },
+          ],
+        }),
+      );
+    },
+  );
 
   it.each([1, 1.5])(
     'perdaPercentual %d → 400 DADOS_INVALIDOS em perda_percentual',
@@ -889,6 +931,7 @@ describe('validarFichaTecnica', () => {
         embalagemPorUnidade: -0.1,
         perdaPercentual: -0.1,
         lucroPercentual: 1,
+        minutosTrabalhoPorLote: -1,
       }),
     ).toThrow(
       expect.objectContaining({
@@ -898,6 +941,7 @@ describe('validarFichaTecnica', () => {
           expect.objectContaining({ field: 'embalagem_por_unidade' }),
           expect.objectContaining({ field: 'perda_percentual' }),
           expect.objectContaining({ field: 'lucro_percentual' }),
+          expect.objectContaining({ field: 'minutos_trabalho_por_lote' }),
         ],
       }),
     );

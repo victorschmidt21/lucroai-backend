@@ -92,6 +92,16 @@ export class CreateReceitaDto {
   embalagem_por_unidade?: number | null;
 
   /**
+   * Minutos em que você fica ocupada com 1 lote (preparar, mexer, montar,
+   * embalar), sem o tempo sozinha no forno ou na geladeira; ≥ 0. Padrão 0
+   * (BE-45). @example 40
+   */
+  @IsOptional()
+  @IsNumber({ allowNaN: false, allowInfinity: false })
+  @Min(0)
+  minutos_trabalho_por_lote?: number | null;
+
+  /**
    * Fração das unidades que não são vendidas (sobra, queima), de 0 até
    * menos de 1. Padrão 0. @example 0.05
    */

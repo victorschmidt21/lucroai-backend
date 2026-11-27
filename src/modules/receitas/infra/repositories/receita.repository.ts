@@ -28,6 +28,7 @@ interface ReceitaData {
   embalagemPorUnidade: number;
   perdaPercentual: number;
   lucroPercentual: number | null;
+  minutosTrabalhoPorLote: number;
   vendavel: boolean;
 }
 

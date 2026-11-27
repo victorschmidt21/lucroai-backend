@@ -27,6 +27,11 @@ export interface FichaTecnica {
   perdaPercentual: number;
   /** Fração do **preço**; `null` usa o `lucroPadrao` da empresa. */
   lucroPercentual: number | null;
+  /**
+   * Minutos em que a dona fica ocupada com 1 lote (preparar, mexer, montar,
+   * embalar), sem o tempo sozinha no forno ou na geladeira (BE-45).
+   */
+  minutosTrabalhoPorLote: number;
 }
 
 /** Padrões de uma receita criada sem os campos da ficha técnica. */
@@ -35,6 +40,7 @@ export const FICHA_TECNICA_PADRAO: Readonly<FichaTecnica> = Object.freeze({
   embalagemPorUnidade: 0,
   perdaPercentual: 0,
   lucroPercentual: null,
+  minutosTrabalhoPorLote: 0,
 });
 
 /**
@@ -48,6 +54,7 @@ export function resolverFichaTecnica(
     embalagemPorUnidade?: number | null;
     perdaPercentual?: number | null;
     lucroPercentual?: number | null;
+    minutosTrabalhoPorLote?: number | null;
   },
   salva: FichaTecnica = FICHA_TECNICA_PADRAO,
 ): FichaTecnica {
@@ -60,12 +67,14 @@ export function resolverFichaTecnica(
       informada.lucroPercentual === undefined
         ? salva.lucroPercentual
         : informada.lucroPercentual,
+    minutosTrabalhoPorLote:
+      informada.minutosTrabalhoPorLote ?? salva.minutosTrabalhoPorLote,
   };
 }
 
 /**
  * Confere a ficha técnica já mesclada com a salva: uso de forno > 0,
- * embalagem ≥ 0, perda e lucro de 0 até menos de 1. Perda ou lucro de 100%
+ * embalagem ≥ 0, perda e lucro de 0 até menos de 1, minutos de trabalho ≥ 0. Perda ou lucro de 100%
  * não têm preço possível (divisão por zero). Lança 400 `DADOS_INVALIDOS`, no
  * formato do ValidationPipe, com um detalhe por campo do corpo.
  */
@@ -99,6 +108,15 @@ export function validarFichaTecnica(ficha: FichaTecnica): void {
     details.push({
       field: 'lucro_percentual',
       messages: ['lucro_percentual deve ser uma fração de 0 até menos de 1'],
+    });
+  }
+  if (
+    !Number.isFinite(ficha.minutosTrabalhoPorLote) ||
+    ficha.minutosTrabalhoPorLote < 0
+  ) {
+    details.push({
+      field: 'minutos_trabalho_por_lote',
+      messages: ['minutos_trabalho_por_lote não pode ser negativo'],
     });
   }
   if (details.length > 0) {
