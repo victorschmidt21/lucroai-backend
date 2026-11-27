@@ -180,6 +180,8 @@ model ConfiguracaoCustos {
   lucroPadrao       Float      @default(0.15) @map("lucro_padrao")
   impostoPercentual Float      @default(0) @map("imposto_percentual")
   taxaMaquininha    Float      @default(0) @map("taxa_maquininha")
+  /// Reais por hora de trabalho da dona (BE-45); 0 deixa o trabalho fora do custo
+  valorHora         Float      @default(0) @map("valor_hora")
 
   empresa Empresa @relation(fields: [empresaId], references: [id])
 
@@ -208,23 +210,25 @@ model CanalVenda {
 // ---------- receitas ----------
 
 model Receita {
-  id                  Int           @id @default(autoincrement())
-  empresaId           Int           @map("empresa_id")
-  nome                String        @db.VarChar(80)
+  id                     Int           @id @default(autoincrement())
+  empresaId              Int           @map("empresa_id")
+  nome                   String        @db.VarChar(80)
   /// Unidades boas (vendáveis) por lote
-  rendimento          Int
-  unidadeRendimento   UnidadeMedida @map("unidade_rendimento")
+  rendimento             Int
+  unidadeRendimento      UnidadeMedida @map("unidade_rendimento")
   /// Fornadas ou minutos de forno de 1 lote, conforme a baseRateio da empresa
-  usoPorLote          Float         @default(1) @map("uso_por_lote")
+  usoPorLote             Float         @default(1) @map("uso_por_lote")
   /// Reais por unidade (caixa, pote ou saquinho do próprio produto)
-  embalagemPorUnidade Float         @default(0) @map("embalagem_por_unidade")
+  embalagemPorUnidade    Float         @default(0) @map("embalagem_por_unidade")
+  /// Minutos de trabalho da dona em 1 lote, sem o tempo sozinha no forno ou na geladeira (BE-45)
+  minutosTrabalhoPorLote Float         @default(0) @map("minutos_trabalho_por_lote")
   /// Fração das unidades que não são vendidas (0 ≤ perda < 1)
-  perdaPercentual     Float         @default(0) @map("perda_percentual")
+  perdaPercentual        Float         @default(0) @map("perda_percentual")
   /// Fração do preço; null usa o lucroPadrao da empresa
-  lucroPercentual     Float?        @map("lucro_percentual")
+  lucroPercentual        Float?        @map("lucro_percentual")
   /// false: a receita só serve para usar dentro de outras (BE-39)
-  vendavel            Boolean       @default(true)
-  dataCriacao         DateTime      @default(now()) @map("data_criacao")
+  vendavel               Boolean       @default(true)
+  dataCriacao            DateTime      @default(now()) @map("data_criacao")
 
   empresa                     Empresa                      @relation(fields: [empresaId], references: [id])
   itens                       ItemReceita[]
@@ -362,10 +366,10 @@ model Producao {
   custoUnitario Float?   @map("custo_unitario")
   dataProducao  DateTime @default(now()) @map("data_producao")
 
-  empresa Empresa          @relation(fields: [empresaId], references: [id])
+  empresa        Empresa                @relation(fields: [empresaId], references: [id])
   /// RESTRICT: receita com produção não pode ser excluída
-  receita Receita          @relation(fields: [receitaId], references: [id], onDelete: Restrict)
-  rateios RateioProducao[]
+  receita        Receita                @relation(fields: [receitaId], references: [id], onDelete: Restrict)
+  rateios        RateioProducao[]
   /// Receitas usadas dentro da produzida que saíram do estoque pronto (BE-41)
   receitasUsadas ReceitaUsadaProducao[]
 
