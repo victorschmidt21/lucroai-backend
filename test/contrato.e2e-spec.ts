@@ -72,6 +72,8 @@ const receitaNovaSchema = receitaSchema.extend({
   embalagemPorUnidade: z.number(),
   perdaPercentual: z.number(),
   lucroPercentual: z.number().optional(),
+  /** BE-45. */
+  minutosTrabalhoPorLote: z.number(),
   custo: z.object({
     ingredientesLote: z.number(),
     gastosMensaisLote: z.number(),
@@ -160,6 +162,8 @@ const configuracaoCustosSchema = z.object({
   lucroPadrao: z.number(),
   impostoPercentual: z.number(),
   taxaMaquininha: z.number(),
+  /** BE-45. */
+  valorHora: z.number(),
 });
 
 /** `/canais` (BE-25). */
@@ -609,6 +613,52 @@ describe('Contrato com o frontend (e2e)', () => {
         .send({ margem_lucro: 0.5 })
         .expect(200);
       expect(validar(receitaSchema, editada.body).margemLucro).toBe(0.5);
+
+      // BE-45: minutos de trabalho por lote, padrão 0, ≥ 0, mantidos quando
+      // omitidos no PUT.
+      expect(
+        validar(receitaNovaSchema, temporaria.body).minutosTrabalhoPorLote,
+      ).toBe(0);
+      const comTrabalho = await comA('put', `/receitas/${receitaId}`)
+        .send({ minutos_trabalho_por_lote: 80 })
+        .expect(200);
+      expect(
+        validar(receitaNovaSchema, comTrabalho.body).minutosTrabalhoPorLote,
+      ).toBe(80);
+      const semCampo = await comA('put', `/receitas/${receitaId}`)
+        .send({ nome: 'Pão doce' })
+        .expect(200);
+      expect(semCampo.body).toMatchObject({ minutosTrabalhoPorLote: 80 });
+      const lidaComTrabalho = await comA(
+        'get',
+        `/receitas/${receitaId}`,
+      ).expect(200);
+      expect(lidaComTrabalho.body).toMatchObject({
+        minutosTrabalhoPorLote: 80,
+      });
+      const trabalhoNegativo = await comA('put', `/receitas/${receitaId}`)
+        .send({ minutos_trabalho_por_lote: -5 })
+        .expect(400);
+      validar(erroSchema, trabalhoNegativo.body);
+      expect(trabalhoNegativo.body).toMatchObject({
+        code: 'DADOS_INVALIDOS',
+        details: [{ field: 'minutos_trabalho_por_lote' }],
+      });
+      const criadaComTrabalho = await comA('post', '/receitas')
+        .send({
+          nome: 'Com trabalho',
+          rendimento: 1,
+          unidadeRendimento: 'UN',
+          minutos_trabalho_por_lote: 40,
+          insumos: [{ insumo_id: acucarId, quantidade: 1 }],
+        })
+        .expect(201);
+      expect(criadaComTrabalho.body).toMatchObject({
+        minutosTrabalhoPorLote: 40,
+      });
+      await comA('delete', `/receitas/${criadaComTrabalho.body.id}`).expect(
+        204,
+      );
 
       await comA('delete', `/receitas/${semMargem.id}`).expect(204);
       await comA('get', `/receitas/${semMargem.id}`).expect(404);
@@ -1115,6 +1165,7 @@ describe('Contrato com o frontend (e2e)', () => {
         lucroPadrao: 0.15,
         impostoPercentual: 0,
         taxaMaquininha: 0,
+        valorHora: 0,
       });
 
       // Campo omitido mantém o valor salvo.
@@ -1136,6 +1187,30 @@ describe('Contrato com o frontend (e2e)', () => {
       expect(invalida.body).toMatchObject({
         details: [{ field: 'capacidadeMensal' }],
       });
+
+      // BE-45: valor da hora, ≥ 0, mantido quando omitido.
+      const comHora = await comA('put', '/configuracao-custos')
+        .send({ valorHora: 18.75 })
+        .expect(200);
+      expect(validar(configuracaoCustosSchema, comHora.body)).toMatchObject({
+        valorHora: 18.75,
+        capacidadeMensal: 1200,
+      });
+      const semHora = await comA('put', '/configuracao-custos')
+        .send({ lucroPadrao: 0.15 })
+        .expect(200);
+      expect(semHora.body).toMatchObject({ valorHora: 18.75 });
+      const horaNegativa = await comA('put', '/configuracao-custos')
+        .send({ valorHora: -1 })
+        .expect(400);
+      validar(erroSchema, horaNegativa.body);
+      expect(horaNegativa.body).toMatchObject({
+        code: 'DADOS_INVALIDOS',
+        details: [{ field: 'valorHora' }],
+      });
+      await comA('put', '/configuracao-custos')
+        .send({ valorHora: 0 })
+        .expect(200);
 
       // A configuração é sempre a da empresa do token.
       const daB = await comB('get', '/configuracao-custos').expect(200);
