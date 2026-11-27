@@ -18,6 +18,7 @@ import {
   calcularPreco,
   calcularPrecoNoCanal,
   calcularPrecoVenda,
+  calcularTrabalhoLote,
   FICHA_TECNICA_PADRAO,
   lucroDaMargem,
   lucroPercentualInformado,
@@ -173,8 +174,10 @@ describe('calcularCustoUnitario (BE-28)', () => {
     expect(d).toEqual({
       ingredientesLote: 10,
       gastosMensaisLote: 5,
+      trabalhoLote: 0,
       ingredientes: 1,
       gastosMensais: 0.5,
+      trabalho: 0,
       gastosPorUnidade: 0.2,
       embalagem: 0.3,
       perdas: expect.closeTo(0.5, P),
@@ -240,6 +243,7 @@ describe('calcularPreco (BE-28)', () => {
     expect(r.composicao).toEqual({
       ingredientes: parte(0.6, 0.3),
       gastosMensais: parte(0.1, 0.05),
+      trabalho: parte(0, 0),
       gastosPorUnidade: parte(0.05, 0.025),
       embalagem: parte(0.05, 0.025),
       perdas: parte(0.2, 0.1),
@@ -803,6 +807,7 @@ describe('resolverFichaTecnica', () => {
       embalagemPorUnidade: 0,
       perdaPercentual: 0,
       lucroPercentual: null,
+      minutosTrabalhoPorLote: 0,
     });
     expect(
       resolverFichaTecnica({
@@ -810,6 +815,7 @@ describe('resolverFichaTecnica', () => {
         embalagemPorUnidade: null,
         perdaPercentual: null,
         lucroPercentual: null,
+        minutosTrabalhoPorLote: null,
       }),
     ).toEqual(FICHA_TECNICA_PADRAO);
   });
@@ -820,11 +826,29 @@ describe('resolverFichaTecnica', () => {
       embalagemPorUnidade: 0.3,
       perdaPercentual: 0.05,
       lucroPercentual: 0.2,
+      minutosTrabalhoPorLote: 40,
     };
     expect(resolverFichaTecnica({ usoPorLote: 3 }, salva)).toEqual({
       ...salva,
       usoPorLote: 3,
     });
+  });
+
+  it('minutosTrabalhoPorLote informado substitui (até 0); omitido ou null mantém', () => {
+    const salva = { ...FICHA_TECNICA_PADRAO, minutosTrabalhoPorLote: 40 };
+    expect(
+      resolverFichaTecnica({ minutosTrabalhoPorLote: 80 }, salva)
+        .minutosTrabalhoPorLote,
+    ).toBe(80);
+    expect(
+      resolverFichaTecnica({ minutosTrabalhoPorLote: 0 }, salva)
+        .minutosTrabalhoPorLote,
+    ).toBe(0);
+    expect(resolverFichaTecnica({}, salva).minutosTrabalhoPorLote).toBe(40);
+    expect(
+      resolverFichaTecnica({ minutosTrabalhoPorLote: null }, salva)
+        .minutosTrabalhoPorLote,
+    ).toBe(40);
   });
 
   it('lucroPercentual null volta ao lucro padrão; os outros null mantêm', () => {
@@ -833,6 +857,7 @@ describe('resolverFichaTecnica', () => {
       embalagemPorUnidade: 0.3,
       perdaPercentual: 0.05,
       lucroPercentual: 0.2,
+      minutosTrabalhoPorLote: 40,
     };
     expect(
       resolverFichaTecnica(
@@ -849,6 +874,7 @@ describe('validarFichaTecnica', () => {
     embalagemPorUnidade: 0,
     perdaPercentual: 0,
     lucroPercentual: null,
+    minutosTrabalhoPorLote: 0,
   };
 
   it('aceita os padrões e os limites válidos', () => {
@@ -859,9 +885,29 @@ describe('validarFichaTecnica', () => {
         embalagemPorUnidade: 0.15,
         perdaPercentual: 0.999,
         lucroPercentual: 0,
+        minutosTrabalhoPorLote: 80.5,
       }),
     ).not.toThrow();
   });
+
+  it.each([-5, -0.01, Number.NaN, Number.POSITIVE_INFINITY])(
+    'minutosTrabalhoPorLote %d → 400 DADOS_INVALIDOS em minutos_trabalho_por_lote',
+    (minutosTrabalhoPorLote) => {
+      expect(() =>
+        validarFichaTecnica({ ...valida, minutosTrabalhoPorLote }),
+      ).toThrow(
+        expect.objectContaining({
+          code: 'DADOS_INVALIDOS',
+          details: [
+            {
+              field: 'minutos_trabalho_por_lote',
+              messages: ['minutos_trabalho_por_lote não pode ser negativo'],
+            },
+          ],
+        }),
+      );
+    },
+  );
 
   it.each([1, 1.5])(
     'perdaPercentual %d → 400 DADOS_INVALIDOS em perda_percentual',
@@ -889,6 +935,7 @@ describe('validarFichaTecnica', () => {
         embalagemPorUnidade: -0.1,
         perdaPercentual: -0.1,
         lucroPercentual: 1,
+        minutosTrabalhoPorLote: -1,
       }),
     ).toThrow(
       expect.objectContaining({
@@ -898,6 +945,7 @@ describe('validarFichaTecnica', () => {
           expect.objectContaining({ field: 'embalagem_por_unidade' }),
           expect.objectContaining({ field: 'perda_percentual' }),
           expect.objectContaining({ field: 'lucro_percentual' }),
+          expect.objectContaining({ field: 'minutos_trabalho_por_lote' }),
         ],
       }),
     );
@@ -1190,3 +1238,226 @@ function capturar(fn: () => void): unknown {
   }
   throw new Error('era esperado um erro');
 }
+
+describe('seu trabalho no custo e no preço (BE-46)', () => {
+  // Valor da hora de exemplo: R$ 18,75.
+  const VALOR_HORA = 18.75;
+  const lote = {
+    ingredientesLote: 10,
+    gastosMensaisLote: 5,
+    rendimento: 50,
+    embalagemPorUnidade: 0.1,
+    gastosPorUnidade: 0.05,
+    perdaPercentual: 0,
+  };
+
+  it('trabalhoLote = minutos ÷ 60 × valor da hora, sem arredondar', () => {
+    expect(calcularTrabalhoLote(40, VALOR_HORA)).toBeCloseTo(12.5, P);
+    expect(calcularTrabalhoLote(7, VALOR_HORA)).toBeCloseTo(2.1875, P);
+    expect(calcularTrabalhoLote(0, VALOR_HORA)).toBe(0);
+    expect(calcularTrabalhoLote(40, 0)).toBe(0);
+  });
+
+  it('lote de 40 min que rende 50 un soma R$ 0,25 por unidade (critério)', () => {
+    const sem = calcularCustoUnitario(lote);
+    const com = calcularCustoUnitario({
+      ...lote,
+      trabalhoLote: calcularTrabalhoLote(40, VALOR_HORA),
+    });
+    expect(com.trabalhoLote).toBeCloseTo(12.5, P);
+    expect(com.trabalho).toBeCloseTo(0.25, P);
+    expect(com.custoUnitario - sem.custoUnitario).toBeCloseTo(0.25, P);
+    // O trabalho não depende da capacidade: entra no custo variável.
+    expect(com.custoSemGastosMensais - sem.custoSemGastosMensais).toBeCloseTo(
+      0.25,
+      P,
+    );
+  });
+
+  it('com perda de 10%, o trabalho soma R$ 0,2778 (critério)', () => {
+    const comPerda = { ...lote, perdaPercentual: 0.1 };
+    const sem = calcularCustoUnitario(comPerda);
+    const com = calcularCustoUnitario({
+      ...comPerda,
+      trabalhoLote: calcularTrabalhoLote(40, VALOR_HORA),
+    });
+    const acrescimo = com.custoUnitario - sem.custoUnitario;
+    expect(acrescimo).toBeCloseTo(0.25 / 0.9, P);
+    expect(round4(acrescimo)).toBe(0.2778);
+    // A parte trabalho é antes da perda; a perda sobre ele vai para perdas.
+    expect(com.trabalho).toBeCloseTo(0.25, P);
+    expect(com.perdas - sem.perdas).toBeCloseTo(0.25 / 0.9 - 0.25, P);
+  });
+
+  it('as partes por unidade somam o custo unitário', () => {
+    const d = calcularCustoUnitario({
+      ...lote,
+      perdaPercentual: 0.1,
+      trabalhoLote: 12.5,
+    });
+    expect(
+      d.ingredientes +
+        d.gastosMensais +
+        d.trabalho +
+        d.gastosPorUnidade +
+        d.embalagem +
+        d.perdas,
+    ).toBeCloseTo(d.custoUnitario, P);
+  });
+
+  it.each([
+    { minutosTrabalhoPorLote: 0, valorHora: VALOR_HORA },
+    { minutosTrabalhoPorLote: 40, valorHora: 0 },
+    {},
+  ])(
+    'com valor da hora 0 ou minutos 0, custo e preço iguais aos de antes (%o)',
+    (trabalho) => {
+      const base = {
+        itens: paoFrances,
+        rendimento: 28,
+        usoPorLote: 0.2,
+        perdaPercentual: 0.05,
+        gastos: gastosSeed,
+        capacidadeMensal: CAPACIDADE,
+      };
+      const antes = calcularCustoReceita(base);
+      const depois = calcularCustoReceita({ ...base, ...trabalho });
+      expect(depois).toEqual(antes);
+      expect(depois.detalhe.trabalho).toBe(0);
+      const p = {
+        imposto: 0,
+        taxaCanal: 0.0136,
+        gastosPercentuais: 0,
+        lucro: 0.15,
+      };
+      expect(calcularPreco(depois.detalhe, p)).toEqual(
+        calcularPreco(antes.detalhe, p),
+      );
+    },
+  );
+
+  it('calcularCustoReceita soma o trabalho do lote e o lucro segue 15% do preço', () => {
+    const custo = calcularCustoReceita({
+      itens: [{ insumoId: 1, quantidade: 1, custoUnitario: 10 }],
+      rendimento: 50,
+      minutosTrabalhoPorLote: 40,
+      valorHora: VALOR_HORA,
+      gastos: [],
+      capacidadeMensal: CAPACIDADE,
+      lotes: 2,
+    });
+    // (10 + 12,5) ÷ 50
+    expect(custo.custoUnitario).toBeCloseTo(0.45, P);
+    expect(custo.detalhe.trabalhoLote).toBeCloseTo(12.5, P);
+    expect(custo.custoProducao).toBeCloseTo(0.45 * 100, P);
+    const preco = calcularPreco(custo.detalhe, {
+      imposto: 0,
+      taxaCanal: 0,
+      gastosPercentuais: 0,
+      lucro: 0.15,
+    });
+    expect(preco.preco).toBeCloseTo(0.45 / 0.85, P);
+    expect(preco.composicao?.lucro.fracao).toBeCloseTo(0.15, P);
+  });
+
+  it('mudar o valor da hora muda o preço sugerido (critério)', () => {
+    const preco = (valorHora: number) =>
+      calcularPreco(
+        calcularCustoReceita({
+          itens: [{ insumoId: 1, quantidade: 1, custoUnitario: 10 }],
+          rendimento: 50,
+          minutosTrabalhoPorLote: 40,
+          valorHora,
+          gastos: [],
+          capacidadeMensal: CAPACIDADE,
+        }).detalhe,
+        { imposto: 0, taxaCanal: 0, gastosPercentuais: 0, lucro: 0.15 },
+      ).preco;
+    expect(preco(0)).toBeCloseTo(0.2 / 0.85, P);
+    expect(preco(18.75)).toBeCloseTo(0.45 / 0.85, P);
+    expect(preco(30)).toBeCloseTo(0.6 / 0.85, P);
+  });
+
+  it('composição mostra o trabalho e as frações somam 1 (critério)', () => {
+    const custo = calcularCustoUnitario({
+      ...lote,
+      perdaPercentual: 0.1,
+      trabalhoLote: calcularTrabalhoLote(40, VALOR_HORA),
+    });
+    const r = calcularPreco(custo, {
+      imposto: 0.06,
+      taxaCanal: 0.0136,
+      gastosPercentuais: 0.04,
+      lucro: 0.15,
+    });
+    const preco = r.preco ?? 0;
+    expect(r.composicao?.trabalho.valor).toBeCloseTo(0.25, P);
+    expect(r.composicao?.trabalho.fracao).toBeCloseTo(0.25 / preco, P);
+    const partes = Object.values(r.composicao ?? {});
+    expect(partes).toHaveLength(10);
+    expect(partes.reduce((t, x) => t + x.valor, 0)).toBeCloseTo(preco, P);
+    expect(partes.reduce((t, x) => t + x.fracao, 0)).toBeCloseTo(1, P);
+  });
+
+  describe('receita dentro de receita', () => {
+    // Brigadeiro de 1000 g, sem forno nem perda, com 60 min de trabalho.
+    const brigadeiro = {
+      itens: [{ insumoId: 1, quantidade: 1, custoUnitario: 35 }],
+      rendimento: 1000,
+      minutosTrabalhoPorLote: 60,
+      valorHora: VALOR_HORA,
+      gastos: [],
+      capacidadeMensal: CAPACIDADE,
+    };
+
+    it('1000 g com 60 min somam R$ 0,01875/g de trabalho (critério)', () => {
+      const sem = calcularCustoParaUsoEmReceita({
+        ...brigadeiro,
+        minutosTrabalhoPorLote: 0,
+      });
+      const com = calcularCustoParaUsoEmReceita(brigadeiro);
+      expect(sem).toBeCloseTo(0.035, P);
+      expect(com - sem).toBeCloseTo(0.01875, P);
+    });
+
+    it('a perda da receita usada também pesa sobre o trabalho', () => {
+      expect(
+        calcularCustoParaUsoEmReceita({ ...brigadeiro, perdaPercentual: 0.25 }),
+      ).toBeCloseTo((0.035 + 0.01875) / 0.75, P);
+    });
+
+    it('150 g no Brownie Dois Amores somam R$ 2,81; a montagem soma à parte (critério)', () => {
+      const doisAmores = (valorHora: number) =>
+        calcularCustoReceita({
+          itens: [],
+          receitas: [
+            {
+              receitaId: 2,
+              quantidade: 150,
+              custoUnitario: calcularCustoParaUsoEmReceita({
+                ...brigadeiro,
+                valorHora,
+              }),
+            },
+          ],
+          rendimento: 1,
+          // Só a montagem: 10 min.
+          minutosTrabalhoPorLote: 10,
+          valorHora,
+          gastos: [],
+          capacidadeMensal: CAPACIDADE,
+        });
+      const sem = doisAmores(0);
+      const com = doisAmores(VALOR_HORA);
+      const doBrigadeiro =
+        com.detalhe.ingredientesLote - sem.detalhe.ingredientesLote;
+      expect(doBrigadeiro).toBeCloseTo(2.8125, P);
+      expect(Math.round(doBrigadeiro * 100) / 100).toBe(2.81);
+      expect(com.detalhe.trabalhoLote).toBeCloseTo(3.125, P);
+      expect(com.custoUnitario - sem.custoUnitario).toBeCloseTo(
+        2.8125 + 3.125,
+        P,
+      );
+    });
+  });
+});

@@ -12,6 +12,11 @@ export interface ReceitaParaProducao {
   ingredientesLote: number;
   /** Fornadas ou minutos de forno de 1 lote (BE-27); 1 se omitido. */
   usoPorLote?: number;
+  /**
+   * Seu trabalho em 1 lote (`calcularTrabalhoLote`, BE-46) com o valor da
+   * hora de agora; 0 se omitido.
+   */
+  trabalhoLote?: number;
 }
 
 export interface GastoParaProducao extends GastoParaCusto {
@@ -29,6 +34,8 @@ export interface CalculoProducao {
   totalUnidades: number;
   custoTotal: number;
   custoUnitario: number;
+  /** `lotes × trabalhoLote` (BE-47), já dentro do `custoTotal`. */
+  custoTrabalho: number;
   rateios: RateioCalculado[];
 }
 
@@ -41,6 +48,9 @@ export interface CalculoProducao {
  * `POR_UNIDADE`, embalagem e perda são custos da unidade vendida e ficam no
  * custo da receita e da venda; `PERCENTUAL_VENDA` é fração do preço. Nenhum
  * deles gera rateio na produção.
+ * BE-47: soma também seu trabalho, `lotes × trabalhoLote`, como os insumos e o
+ * forno. O custo é por lote, então o trabalho das unidades perdidas já fica
+ * nas unidades boas (`custoUnitario = custoTotal ÷ lotes × rendimento`).
  * Sem arredondamento (BE-23): o `ProducaoDto` arredonda a resposta.
  */
 export function calcularProducao(
@@ -65,9 +75,10 @@ export function calcularProducao(
       valorRateado: calcularGastoNoCusto(gasto, uso),
     }));
   const totalRateio = rateios.reduce((acc, r) => acc + r.valorRateado, 0);
-  const custoTotal = custoIngredientes + totalRateio;
+  const custoTrabalho = (receita.trabalhoLote ?? 0) * lotes;
+  const custoTotal = custoIngredientes + totalRateio + custoTrabalho;
   const custoUnitario = totalUnidades > 0 ? custoTotal / totalUnidades : 0;
-  return { totalUnidades, custoTotal, custoUnitario, rateios };
+  return { totalUnidades, custoTotal, custoUnitario, custoTrabalho, rateios };
 }
 
 /** Receita usada dentro da produzida, por lote (BE-41). */

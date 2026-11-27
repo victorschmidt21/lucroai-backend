@@ -104,6 +104,8 @@ export class ProducaoService {
           // Ao custo médio dos insumos (BE-30), sem os gastos da receita.
           ingredientesLote: receita.custo.detalhe.ingredientesLote,
           usoPorLote: receita.usoPorLote,
+          // BE-47: com o valor da hora de agora; fica gravado na produção.
+          trabalhoLote: receita.custo.detalhe.trabalhoLote,
         },
         dto.quantidade,
         gastos,

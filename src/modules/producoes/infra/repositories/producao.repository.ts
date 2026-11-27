@@ -24,6 +24,7 @@ interface ProducaoData {
   totalUnidades: number;
   custoTotal: number;
   custoUnitario: number;
+  custoTrabalho: number;
   rateios: RateioData[];
   receitasUsadas: ReceitaUsadaData[];
 }

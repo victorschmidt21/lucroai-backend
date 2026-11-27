@@ -101,6 +101,8 @@ export interface ResumoReceita {
   nome: string;
   unidadeRendimento: UnidadeMedida;
   vendavel: boolean;
+  /** Para o alerta `valorHoraVazio` (BE-47). */
+  minutosTrabalhoPorLote: number;
 }
 
 /** O Balcão, cuja taxa é a da maquininha: base do `precoSugerido` (BE-28). */
@@ -317,7 +319,7 @@ export class ReceitaService {
     };
   }
 
-  /** Para o estoque pronto e os alertas (BE-41): sem calcular custo. */
+  /** Para o estoque pronto e os alertas (BE-41, BE-47): sem calcular custo. */
   async listarResumos(empresaId: number): Promise<ResumoReceita[]> {
     const rows = await this.repository.listByEmpresa(empresaId);
     return rows.map((row) => ({
@@ -325,6 +327,7 @@ export class ReceitaService {
       nome: row.nome,
       unidadeRendimento: row.unidadeRendimento,
       vendavel: row.vendavel,
+      minutosTrabalhoPorLote: row.minutosTrabalhoPorLote,
     }));
   }
 
@@ -397,6 +400,7 @@ export class ReceitaService {
       embalagemPorUnidade: dto.embalagem_por_unidade,
       perdaPercentual: dto.perda_percentual,
       lucroPercentual: lucroPercentualInformado(dto),
+      minutosTrabalhoPorLote: dto.minutos_trabalho_por_lote,
     };
   }
 
@@ -456,7 +460,8 @@ export class ReceitaService {
 
   /**
    * O mesmo mapa de custo dos insumos vale para os da receita usada (BE-40):
-   * reposição para o preço, custo médio para produção e venda.
+   * reposição para o preço, custo médio para produção e venda. O valor da
+   * hora é o atual da empresa (BE-46): mudá-lo muda a próxima leitura.
    */
   private calcular(
     receita: ReceitaComItens,
@@ -480,6 +485,8 @@ export class ReceitaService {
           rendimento: item.receitaUsada.rendimento,
           usoPorLote: item.receitaUsada.usoPorLote,
           perdaPercentual: item.receitaUsada.perdaPercentual,
+          minutosTrabalhoPorLote: item.receitaUsada.minutosTrabalhoPorLote,
+          valorHora: contexto.configuracao.valorHora,
           gastos: contexto.gastos,
           capacidadeMensal: contexto.configuracao.capacidadeMensal,
         }),
@@ -488,6 +495,8 @@ export class ReceitaService {
       usoPorLote: receita.usoPorLote,
       embalagemPorUnidade: receita.embalagemPorUnidade,
       perdaPercentual: receita.perdaPercentual,
+      minutosTrabalhoPorLote: receita.minutosTrabalhoPorLote,
+      valorHora: contexto.configuracao.valorHora,
       gastos: contexto.gastos,
       capacidadeMensal: contexto.configuracao.capacidadeMensal,
       lotes,

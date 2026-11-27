@@ -72,11 +72,17 @@ const receitaNovaSchema = receitaSchema.extend({
   embalagemPorUnidade: z.number(),
   perdaPercentual: z.number(),
   lucroPercentual: z.number().optional(),
+  /** BE-45. */
+  minutosTrabalhoPorLote: z.number(),
   custo: z.object({
     ingredientesLote: z.number(),
     gastosMensaisLote: z.number(),
+    /** BE-46. */
+    trabalhoLote: z.number(),
     ingredientes: z.number(),
     gastosMensais: z.number(),
+    /** BE-46. */
+    trabalho: z.number(),
     gastosPorUnidade: z.number(),
     embalagem: z.number(),
     perdas: z.number(),
@@ -94,6 +100,8 @@ const receitaNovaSchema = receitaSchema.extend({
         .object({
           ingredientes: parteSchema,
           gastosMensais: parteSchema,
+          /** BE-46. */
+          trabalho: parteSchema,
           gastosPorUnidade: parteSchema,
           embalagem: parteSchema,
           perdas: parteSchema,
@@ -126,6 +134,8 @@ const receitaComReceitasSchema = receitaNovaSchema.extend({
 
 /** Receitas usadas que saíram do estoque pronto na produção (BE-41). */
 const producaoNovaSchema = producaoSchema.extend({
+  /** Seu trabalho na produção (BE-47); null nas anteriores. */
+  custoTrabalho: z.number().nullable(),
   receitasUsadas: z.array(
     z.object({
       receitaId: z.number().int(),
@@ -160,6 +170,8 @@ const configuracaoCustosSchema = z.object({
   lucroPadrao: z.number(),
   impostoPercentual: z.number(),
   taxaMaquininha: z.number(),
+  /** BE-45. */
+  valorHora: z.number(),
 });
 
 /** `/canais` (BE-25). */
@@ -255,6 +267,8 @@ const alertasSchema = z.object({
       unidade: z.string(),
     }),
   ),
+  // Minutos de trabalho sem o valor da hora (BE-47).
+  valorHoraVazio: z.boolean(),
 });
 
 const healthSchema = z.object({
@@ -609,6 +623,52 @@ describe('Contrato com o frontend (e2e)', () => {
         .send({ margem_lucro: 0.5 })
         .expect(200);
       expect(validar(receitaSchema, editada.body).margemLucro).toBe(0.5);
+
+      // BE-45: minutos de trabalho por lote, padrão 0, ≥ 0, mantidos quando
+      // omitidos no PUT.
+      expect(
+        validar(receitaNovaSchema, temporaria.body).minutosTrabalhoPorLote,
+      ).toBe(0);
+      const comTrabalho = await comA('put', `/receitas/${receitaId}`)
+        .send({ minutos_trabalho_por_lote: 80 })
+        .expect(200);
+      expect(
+        validar(receitaNovaSchema, comTrabalho.body).minutosTrabalhoPorLote,
+      ).toBe(80);
+      const semCampo = await comA('put', `/receitas/${receitaId}`)
+        .send({ nome: 'Pão doce' })
+        .expect(200);
+      expect(semCampo.body).toMatchObject({ minutosTrabalhoPorLote: 80 });
+      const lidaComTrabalho = await comA(
+        'get',
+        `/receitas/${receitaId}`,
+      ).expect(200);
+      expect(lidaComTrabalho.body).toMatchObject({
+        minutosTrabalhoPorLote: 80,
+      });
+      const trabalhoNegativo = await comA('put', `/receitas/${receitaId}`)
+        .send({ minutos_trabalho_por_lote: -5 })
+        .expect(400);
+      validar(erroSchema, trabalhoNegativo.body);
+      expect(trabalhoNegativo.body).toMatchObject({
+        code: 'DADOS_INVALIDOS',
+        details: [{ field: 'minutos_trabalho_por_lote' }],
+      });
+      const criadaComTrabalho = await comA('post', '/receitas')
+        .send({
+          nome: 'Com trabalho',
+          rendimento: 1,
+          unidadeRendimento: 'UN',
+          minutos_trabalho_por_lote: 40,
+          insumos: [{ insumo_id: acucarId, quantidade: 1 }],
+        })
+        .expect(201);
+      expect(criadaComTrabalho.body).toMatchObject({
+        minutosTrabalhoPorLote: 40,
+      });
+      await comA('delete', `/receitas/${criadaComTrabalho.body.id}`).expect(
+        204,
+      );
 
       await comA('delete', `/receitas/${semMargem.id}`).expect(204);
       await comA('get', `/receitas/${semMargem.id}`).expect(404);
@@ -1024,6 +1084,8 @@ describe('Contrato com o frontend (e2e)', () => {
         estoqueNegativo: [],
         precoDefasado: [],
         produtosNegativos: [],
+        // A receita da seção 2 tem 80 min e o valor da hora ainda é 0.
+        valorHoraVazio: true,
       });
 
       // Farinha a R$ 4/kg com 1 kg; o pão usa 2 kg por lote.
@@ -1115,6 +1177,7 @@ describe('Contrato com o frontend (e2e)', () => {
         lucroPadrao: 0.15,
         impostoPercentual: 0,
         taxaMaquininha: 0,
+        valorHora: 0,
       });
 
       // Campo omitido mantém o valor salvo.
@@ -1136,6 +1199,30 @@ describe('Contrato com o frontend (e2e)', () => {
       expect(invalida.body).toMatchObject({
         details: [{ field: 'capacidadeMensal' }],
       });
+
+      // BE-45: valor da hora, ≥ 0, mantido quando omitido.
+      const comHora = await comA('put', '/configuracao-custos')
+        .send({ valorHora: 18.75 })
+        .expect(200);
+      expect(validar(configuracaoCustosSchema, comHora.body)).toMatchObject({
+        valorHora: 18.75,
+        capacidadeMensal: 1200,
+      });
+      const semHora = await comA('put', '/configuracao-custos')
+        .send({ lucroPadrao: 0.15 })
+        .expect(200);
+      expect(semHora.body).toMatchObject({ valorHora: 18.75 });
+      const horaNegativa = await comA('put', '/configuracao-custos')
+        .send({ valorHora: -1 })
+        .expect(400);
+      validar(erroSchema, horaNegativa.body);
+      expect(horaNegativa.body).toMatchObject({
+        code: 'DADOS_INVALIDOS',
+        details: [{ field: 'valorHora' }],
+      });
+      await comA('put', '/configuracao-custos')
+        .send({ valorHora: 0 })
+        .expect(200);
 
       // A configuração é sempre a da empresa do token.
       const daB = await comB('get', '/configuracao-custos').expect(200);
@@ -1525,6 +1612,83 @@ describe('Contrato com o frontend (e2e)', () => {
       expect(validar(erroSchema, recusada.body).code).toBe(
         'ESTOQUE_INSUFICIENTE',
       );
+    });
+  });
+
+  describe('9. seu trabalho na produção (BE-47)', () => {
+    // Na empresa B, para não mexer no custo das receitas da A.
+    it('a produção grava o custo do trabalho e o alerta avisa o valor da hora vazio', async () => {
+      const alertaB = async () =>
+        validar(alertasSchema, (await comB('get', '/alertas').expect(200)).body)
+          .valorHoraVazio;
+      // B ainda não tem receita com minutos.
+      expect(await alertaB()).toBe(false);
+
+      const insumo = await comB('post', '/insumos')
+        .send({
+          nome: 'Açúcar B',
+          quantidadeBaseCusto: 1,
+          unidade: 'KG',
+          valorPago: 4,
+          quantidadeDisponivelInicial: 10,
+        })
+        .expect(201);
+      const receita = await comB('post', '/receitas')
+        .send({
+          nome: 'Bolo B',
+          rendimento: 10,
+          unidadeRendimento: 'UN',
+          minutos_trabalho_por_lote: 40,
+          insumos: [
+            { insumo_id: validar(insumoSchema, insumo.body).id, quantidade: 1 },
+          ],
+        })
+        .expect(201);
+      const boloId = validar(receitaSchema, receita.body).id;
+      // Valor da hora 0 e uma receita com minutos.
+      expect(await alertaB()).toBe(true);
+
+      // 40 min a R$ 18,75 = R$ 12,50 por lote; 2 lotes = R$ 25.
+      await comB('put', '/configuracao-custos')
+        .send({ valorHora: 18.75 })
+        .expect(200);
+      expect(await alertaB()).toBe(false);
+      const criada = await comB('post', '/producoes')
+        .send({ receita_id: boloId, quantidade: 2, gasto_indireto_ids: [] })
+        .expect(201);
+      const producao = validar(producaoNovaSchema, criada.body);
+      validar(producaoSchema, criada.body);
+      // Ingredientes de 2 lotes (R$ 4 cada) + R$ 25 de trabalho.
+      expect(producao).toMatchObject({
+        custoTrabalho: 25,
+        custoTotal: 33,
+        custoUnitario: 1.65,
+        totalUnidades: 20,
+      });
+
+      // Mudar o valor da hora depois não muda a produção gravada.
+      await comB('put', '/configuracao-custos')
+        .send({ valorHora: 30 })
+        .expect(200);
+      const lida = await comB('get', `/producoes/${producao.id}`).expect(200);
+      expect(validar(producaoNovaSchema, lida.body)).toMatchObject({
+        custoTrabalho: 25,
+        custoTotal: 33,
+      });
+      const lista = await comB('get', `/producoes?receitaId=${boloId}`).expect(
+        200,
+      );
+      expect(lista.body).toMatchObject([{ custoTrabalho: 25 }]);
+
+      // Sem minutos em nenhuma receita, nada a avisar mesmo com hora 0.
+      await comB('put', '/configuracao-custos')
+        .send({ valorHora: 0 })
+        .expect(200);
+      expect(await alertaB()).toBe(true);
+      await comB('put', `/receitas/${boloId}`)
+        .send({ minutos_trabalho_por_lote: 0 })
+        .expect(200);
+      expect(await alertaB()).toBe(false);
     });
   });
 

@@ -46,6 +46,13 @@ export class ProducaoDto {
   custoTotal: number | null;
   /** Com 4 casas. @example 374.7817 */
   custoUnitario: number | null;
+  /**
+   * Novo (BE-47): seu trabalho nesta produção (`lotes × trabalho de 1 lote`),
+   * já dentro do `custoTotal`, com 2 casas. Gravado na hora: mudar o valor da
+   * hora depois não muda. `null` nas produções anteriores à BE-47 (lido como
+   * 0). @example 25
+   */
+  custoTrabalho: number | null;
   /** @example '2026-11-19T12:00:00.000Z' */
   dataProducao: Date;
   rateios: RateioProducaoDto[];
@@ -71,6 +78,7 @@ export function toProducaoDto(row: ProducaoComRateios): ProducaoDto {
     totalUnidades: row.totalUnidades,
     custoTotal: row.custoTotal == null ? null : round2(row.custoTotal),
     custoUnitario: row.custoUnitario == null ? null : round4(row.custoUnitario),
+    custoTrabalho: row.custoTrabalho == null ? null : round2(row.custoTrabalho),
     dataProducao: row.dataProducao,
     rateios: row.rateios.map((rateio) => ({
       gastoIndiretoId: rateio.gastoIndiretoId,

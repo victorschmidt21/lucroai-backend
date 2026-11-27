@@ -139,3 +139,18 @@ export function alertasDeProdutoNegativo<U extends string>(
     })
     .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
 }
+
+/**
+ * Minutos de trabalho informados sem o valor da hora (BE-47): `valorHora` 0 e
+ * ao menos uma receita com `minutosTrabalhoPorLote > 0`. Sem o valor da hora,
+ * o seu trabalho não entra no custo nem no preço.
+ */
+export function valorHoraVazio(
+  valorHora: number,
+  receitas: { minutosTrabalhoPorLote: number }[],
+): boolean {
+  return (
+    valorHora <= 0 &&
+    receitas.some((receita) => receita.minutosTrabalhoPorLote > 0)
+  );
+}
